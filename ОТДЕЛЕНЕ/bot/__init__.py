@@ -1,0 +1,1 @@
+"""Duty queue bot package."""
