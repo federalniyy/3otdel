@@ -10,6 +10,7 @@ from bot.storage import JsonStore
 class ServiceTest(unittest.TestCase):
     def setUp(self) -> None:
         self.store = JsonStore(":memory:")
+        self.store.data["weekly_assignments"] = []
         self.weekly = WeeklyService(self.store)
         self.morning = MorningService(self.store)
 
@@ -34,24 +35,34 @@ class ServiceTest(unittest.TestCase):
         self.assertTrue(self.weekly.is_cleaning_saturday("toilet", date(2026, 7, 4)))
 
     def test_seeded_dorm_weekly_history_counts_once(self) -> None:
-        counts = self.weekly.counts("dorm_weekly")
+        seeded_store = JsonStore(":memory:")
+        seeded_weekly = WeeklyService(seeded_store)
+        counts = seeded_weekly.counts("dorm_weekly")
 
         self.assertEqual(counts["lavrentyev"], 1.0)
         self.assertEqual(counts["kurochkin"], 1.0)
         self.assertEqual(counts["kazakov"], 0.5)
         self.assertEqual(counts["orlov"], 0.5)
         self.assertEqual(counts["sovenko"], 2.0)
+        self.assertEqual(counts["leontyev"], 1.0)
 
-        self.store.bootstrap()
+        seeded_store.bootstrap()
         history_items = [
             assignment
-            for assignment in self.store.data["weekly_assignments"]
+            for assignment in seeded_store.data["weekly_assignments"]
             if assignment["task_id"] == "dorm_weekly"
             and assignment["work_date"]
-            in {"2026-05-02", "2026-05-09", "2026-05-16", "2026-05-23", "2026-05-30"}
+            in {
+                "2026-05-02",
+                "2026-05-09",
+                "2026-05-16",
+                "2026-05-23",
+                "2026-05-30",
+                "2026-06-06",
+            }
         ]
 
-        self.assertEqual(len(history_items), 5)
+        self.assertEqual(len(history_items), 6)
 
     def test_toilet_does_not_reuse_dorm_person_same_week(self) -> None:
         day = date(2026, 6, 13)
