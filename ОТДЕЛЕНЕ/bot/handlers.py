@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
@@ -14,8 +15,10 @@ from .keyboards import (
     admin_keyboard,
     bind_keyboard,
     main_keyboard,
+    morning_admin_keyboard,
     morning_manual_keyboard,
     task_title,
+    weekly_admin_keyboard,
 )
 from .notifications import notify_admins, notify_lender
 from .services import MorningService, WeeklyService
@@ -35,8 +38,16 @@ class Form(StatesGroup):
     morning_debt_replacement = State()
 
 
-def create_router(store: JsonStore, weekly: WeeklyService, morning: MorningService) -> Router:
+def create_router(
+    store: JsonStore,
+    weekly: WeeklyService,
+    morning: MorningService,
+    timezone: str = "Europe/Moscow",
+) -> Router:
     router = Router()
+
+    def today() -> date:
+        return datetime.now(ZoneInfo(timezone)).date()
 
     def bound_person(user_id: int) -> dict | None:
         return store.person_by_telegram(user_id)
@@ -93,14 +104,13 @@ def create_router(store: JsonStore, weekly: WeeklyService, morning: MorningServi
         await callback.answer()
 
     async def send_queue(message: Message) -> None:
-        today = date.today()
-        lines = weekly.preview(today, 21)
+        lines = weekly.preview(today(), 21)
         text = "Очередь на ближайшие 3 недели:\n" + ("\n".join(lines) if lines else "В ближайшие 3 недели суббот нет.")
         await message.answer(text)
 
     @router.callback_query(F.data == "morning7")
     async def morning_callback(callback: CallbackQuery) -> None:
-        lines = morning.preview(date.today(), 7)
+        lines = morning.preview(today(), 7)
         await callback.message.answer("Утренние уборки на 7 дней:\n" + "\n".join(lines))
         await callback.answer()
 
@@ -115,6 +125,23 @@ def create_router(store: JsonStore, weekly: WeeklyService, morning: MorningServi
         if not await require_admin(callback):
             return
         await callback.message.answer("Админ-панель", reply_markup=admin_keyboard())
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("admin:menu:"))
+    async def admin_submenu(callback: CallbackQuery) -> None:
+        if not await require_admin(callback):
+            return
+        menu = callback.data.rsplit(":", 1)[1]
+        if menu == "morning":
+            await callback.message.answer("Настройка очереди спальника утром", reply_markup=morning_admin_keyboard())
+        elif menu in WEEKLY_TASKS:
+            await callback.message.answer(
+                f"Настройка очереди: {WEEKLY_TASKS[menu]['title']}",
+                reply_markup=weekly_admin_keyboard(menu),
+            )
+        else:
+            await callback.answer("Неизвестное меню.", show_alert=True)
+            return
         await callback.answer()
 
     @router.callback_query(F.data.startswith("admin:set_anchor:"))
@@ -139,7 +166,7 @@ def create_router(store: JsonStore, weekly: WeeklyService, morning: MorningServi
             await message.answer(str(error))
             return
         await state.clear()
-        await message.answer("Начало круга обновлено.", reply_markup=admin_keyboard())
+        await message.answer("Начало круга обновлено.", reply_markup=weekly_admin_keyboard(data["task_id"]))
 
     @router.callback_query(F.data.startswith("admin:replace:"))
     async def admin_replace(callback: CallbackQuery, state: FSMContext) -> None:
@@ -167,7 +194,10 @@ def create_router(store: JsonStore, weekly: WeeklyService, morning: MorningServi
             await message.answer(str(error))
             return
         await state.clear()
-        await message.answer("Замена внесена. Очередь дальше будет считаться с учетом новой статистики.", reply_markup=admin_keyboard())
+        await message.answer(
+            "Замена внесена. Будущие назначения этой очереди будут пересчитаны.",
+            reply_markup=weekly_admin_keyboard(data["task_id"]),
+        )
 
     @router.callback_query(F.data.startswith("admin:add:"))
     async def admin_add(callback: CallbackQuery, state: FSMContext) -> None:
@@ -191,7 +221,7 @@ def create_router(store: JsonStore, weekly: WeeklyService, morning: MorningServi
             await message.answer(str(error))
             return
         await state.clear()
-        await message.answer("Усиленная уборка внесена: каждому зачтется по 0.5.", reply_markup=admin_keyboard())
+        await message.answer("Усиленная уборка внесена: каждому зачтется по 0.5.", reply_markup=weekly_admin_keyboard(data["task_id"]))
 
     @router.callback_query(F.data.startswith("admin:skip_weekly:"))
     async def admin_skip_weekly(callback: CallbackQuery, state: FSMContext) -> None:
@@ -215,7 +245,7 @@ def create_router(store: JsonStore, weekly: WeeklyService, morning: MorningServi
             await message.answer(str(error))
             return
         await state.clear()
-        await message.answer("Отмечено: уборки не было, счетчик никому не увеличен.", reply_markup=admin_keyboard())
+        await message.answer("Отмечено: уборки не было, счетчик никому не увеличен.", reply_markup=weekly_admin_keyboard(data["task_id"]))
 
     @router.callback_query(F.data == "admin:skip_morning")
     async def admin_skip_morning(callback: CallbackQuery, state: FSMContext) -> None:
@@ -235,14 +265,18 @@ def create_router(store: JsonStore, weekly: WeeklyService, morning: MorningServi
             await message.answer(str(error))
             return
         await state.clear()
-        await message.answer("День пропущен, очередь сдвинута вперед.", reply_markup=admin_keyboard())
+        await message.answer("День пропущен, очередь сдвинута вперед.", reply_markup=morning_admin_keyboard())
 
     @router.callback_query(F.data == "admin:restart_morning")
     async def admin_restart_morning(callback: CallbackQuery, state: FSMContext) -> None:
         if not await require_admin(callback):
             return
         await state.set_state(Form.restart_morning)
-        await callback.message.answer("Введи двух уборщиков на завтра: `Лаврентьев Курочкин`.", parse_mode="Markdown")
+        await callback.message.answer(
+            "Введи двух уборщиков. Можно просто на завтра: `Лаврентьев Курочкин`.\n"
+            "Можно с датой: `08.06.2026 Лаврентьев Курочкин`.",
+            parse_mode="Markdown",
+        )
         await callback.answer()
 
     @router.message(Form.restart_morning)
@@ -250,13 +284,13 @@ def create_router(store: JsonStore, weekly: WeeklyService, morning: MorningServi
         if not await require_admin(message):
             return
         try:
-            first, second = [parse_person(part) for part in message.text.replace(",", " ").split()[:2]]
-            morning.restart_from_pair(date.today() + timedelta(days=1), first, second)
-        except (ValueError, IndexError) as error:
+            day, first, second = _parse_morning_restart(message.text, today() + timedelta(days=1))
+            morning.restart_from_pair(day, first, second)
+        except ValueError as error:
             await message.answer(str(error) or "Нужно ввести два имени.")
             return
         await state.clear()
-        await message.answer("Утренний круг перезапущен с завтрашнего дня.", reply_markup=admin_keyboard())
+        await message.answer(f"Утренний круг перезапущен с {day.strftime('%d.%m.%Y')}.", reply_markup=morning_admin_keyboard())
 
     @router.callback_query(F.data.startswith("cant_weekly:"))
     async def cant_weekly(callback: CallbackQuery, state: FSMContext) -> None:
@@ -331,7 +365,7 @@ def create_router(store: JsonStore, weekly: WeeklyService, morning: MorningServi
             await message.answer(str(error))
             return
         await state.clear()
-        await message.answer("Замена внесена.", reply_markup=admin_keyboard())
+        await message.answer("Замена внесена.", reply_markup=weekly_admin_keyboard(request["task_id"]))
 
     @router.callback_query(F.data.startswith("cant_morning:"))
     async def cant_morning(callback: CallbackQuery) -> None:
@@ -396,13 +430,13 @@ def create_router(store: JsonStore, weekly: WeeklyService, morning: MorningServi
             await message.answer(str(error))
             return
         await state.clear()
-        await message.answer("Ручная замена внесена, долг будет отдан этому человеку.", reply_markup=admin_keyboard())
+        await message.answer("Ручная замена внесена, долг будет отдан этому человеку.", reply_markup=morning_admin_keyboard())
 
     return router
 
 
 def _parse_date_person(text: str) -> tuple[date, str]:
-    parts = text.replace(",", " ").split()
+    parts = _split_input(text)
     if len(parts) < 2:
         raise ValueError("Нужно ввести дату и имя.")
     return parse_date(parts[0]), parse_person(parts[1])
@@ -411,9 +445,33 @@ def _parse_date_person(text: str) -> tuple[date, str]:
 def _parse_weekly_replace(text: str) -> tuple[date, str | None, str]:
     if "->" in text:
         left, right = text.split("->", 1)
-        left_parts = left.split()
+        left_parts = _split_input(left)
         if len(left_parts) < 2:
             raise ValueError("До стрелки должны быть дата и заменяемый.")
-        return parse_date(left_parts[0]), parse_person(left_parts[1]), parse_person(right.strip())
+        right_parts = _split_input(right)
+        if not right_parts:
+            raise ValueError("После стрелки нужно ввести замену.")
+        return parse_date(left_parts[0]), parse_person(left_parts[1]), parse_person(right_parts[0])
     day, person_id = _parse_date_person(text)
     return day, None, person_id
+
+
+def _parse_morning_restart(text: str, default_day: date) -> tuple[date, str, str]:
+    parts = _split_input(text)
+    if len(parts) < 2:
+        raise ValueError("Нужно ввести двух уборщиков.")
+    try:
+        day = parse_date(parts[0])
+    except ValueError:
+        day = default_day
+        names = parts[:2]
+    else:
+        names = parts[1:3]
+    if len(names) < 2:
+        raise ValueError("Нужно ввести двух уборщиков.")
+    return day, parse_person(names[0]), parse_person(names[1])
+
+
+def _split_input(text: str) -> list[str]:
+    normalized = text.replace(",", " ").replace(";", " ").replace("—", " ")
+    return [part for part in normalized.split() if part]

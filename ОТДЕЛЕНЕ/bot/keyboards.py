@@ -26,27 +26,44 @@ def main_keyboard(is_admin: bool) -> InlineKeyboardMarkup:
 def admin_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text="Очередь туалета", callback_data="admin:menu:toilet")],
+            [InlineKeyboardButton(text="Очередь спальника, суббота", callback_data="admin:menu:dorm_weekly")],
+            [InlineKeyboardButton(text="Очередь спальника, утро", callback_data="admin:menu:morning")],
+            [InlineKeyboardButton(text="Очередь на 3 недели", callback_data="queue3")],
+        ]
+    )
+
+
+def weekly_admin_keyboard(task_id: str) -> InlineKeyboardMarkup:
+    short = WEEKLY_TASKS[task_id]["short"]
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
             [
-                InlineKeyboardButton(text="Старт круга спальник", callback_data="admin:set_anchor:dorm_weekly"),
-                InlineKeyboardButton(text="Старт круга туалет", callback_data="admin:set_anchor:toilet"),
+                InlineKeyboardButton(text=f"Старт круга: {short}", callback_data=f"admin:set_anchor:{task_id}"),
             ],
             [
-                InlineKeyboardButton(text="Заменить спальник", callback_data="admin:replace:dorm_weekly"),
-                InlineKeyboardButton(text="Заменить туалет", callback_data="admin:replace:toilet"),
+                InlineKeyboardButton(text="Заменить назначенного", callback_data=f"admin:replace:{task_id}"),
             ],
             [
-                InlineKeyboardButton(text="+ человек спальник", callback_data="admin:add:dorm_weekly"),
-                InlineKeyboardButton(text="+ человек туалет", callback_data="admin:add:toilet"),
+                InlineKeyboardButton(text="+ человек на усиленную уборку", callback_data=f"admin:add:{task_id}"),
             ],
             [
-                InlineKeyboardButton(text="Спальника не было", callback_data="admin:skip_weekly:dorm_weekly"),
-                InlineKeyboardButton(text="Туалета не было", callback_data="admin:skip_weekly:toilet"),
+                InlineKeyboardButton(text="Уборки не было", callback_data=f"admin:skip_weekly:{task_id}"),
             ],
+            [InlineKeyboardButton(text="Назад", callback_data="admin")],
+        ]
+    )
+
+
+def morning_admin_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
             [
                 InlineKeyboardButton(text="Утра не было", callback_data="admin:skip_morning"),
                 InlineKeyboardButton(text="Круг утра заново", callback_data="admin:restart_morning"),
             ],
-            [InlineKeyboardButton(text="Очередь на 3 недели", callback_data="queue3")],
+            [InlineKeyboardButton(text="Утро на 7 дней", callback_data="morning7")],
+            [InlineKeyboardButton(text="Назад", callback_data="admin")],
         ]
     )
 

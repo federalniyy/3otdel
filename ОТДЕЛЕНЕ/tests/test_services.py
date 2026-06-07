@@ -47,6 +47,19 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(counts[first], 0.5)
         self.assertEqual(counts["leontyev"], 0.5)
 
+    def test_weekly_replace_drops_future_generated_assignments(self) -> None:
+        first_day = date(2026, 6, 13)
+        second_day = date(2026, 6, 20)
+        self.weekly.ensure_assignment("dorm_weekly", first_day)
+        second_before = self.weekly.ensure_assignment("dorm_weekly", second_day)
+
+        self.assertEqual(second_before.participants[0][0], "leontyev")
+
+        self.weekly.replace_person("dorm_weekly", first_day, "leontyev")
+        second_after = self.weekly.ensure_assignment("dorm_weekly", second_day)
+
+        self.assertEqual(second_after.participants[0][0], "sharov")
+
     def test_morning_pairs_follow_strict_odd_roster(self) -> None:
         first_day = self.morning.ensure_day(date(2026, 6, 8))
         second_day = self.morning.ensure_day(date(2026, 6, 9))
@@ -77,6 +90,16 @@ class ServiceTest(unittest.TestCase):
         next_day = self.morning.ensure_day(date(2026, 6, 9))
 
         self.assertEqual([slot.person_id for slot in next_day], ["lavrentyev", "kurochkin"])
+
+    def test_morning_restart_overwrites_already_generated_future(self) -> None:
+        self.morning.preview(date(2026, 6, 8), 7)
+
+        self.morning.restart_from_pair(date(2026, 6, 10), "orlov", "pilugin")
+        restart_day = self.morning.ensure_day(date(2026, 6, 10))
+        next_day = self.morning.ensure_day(date(2026, 6, 11))
+
+        self.assertEqual([slot.person_id for slot in restart_day], ["orlov", "pilugin"])
+        self.assertEqual([slot.person_id for slot in next_day], ["sovenko", "kazakov"])
 
 
 if __name__ == "__main__":

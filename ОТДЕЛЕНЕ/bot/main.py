@@ -28,7 +28,7 @@ async def main() -> None:
 
     bot = Bot(config.bot_token)
     dispatcher = Dispatcher(storage=MemoryStorage())
-    dispatcher.include_router(create_router(store, weekly, morning))
+    dispatcher.include_router(create_router(store, weekly, morning, config.timezone))
 
     scheduler = AsyncIOScheduler(timezone=config.timezone)
     scheduler.add_job(

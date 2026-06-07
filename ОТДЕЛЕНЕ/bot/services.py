@@ -108,9 +108,19 @@ class WeeklyService:
                     break
         else:
             target = participants[0] if participants else None
+            if target is None:
+                participants.append(
+                    {"person_id": new_person_id, "weight": 1.0, "role": "primary"}
+                )
+                assignment["status"] = "planned"
+                self._drop_future_planned(task_id, day)
+                self.store.save()
+                return
         if target is None:
             raise ValueError("Не нашел заменяемого в этом назначении.")
         target["person_id"] = new_person_id
+        assignment["status"] = "planned"
+        self._drop_future_planned(task_id, day)
         self.store.save()
 
     def add_second_person(self, task_id: str, day: date, person_id: str) -> None:
@@ -128,6 +138,8 @@ class WeeklyService:
         assignment["participants"].append(
             {"person_id": person_id, "weight": 0.5, "role": "extra"}
         )
+        assignment["status"] = "planned"
+        self._drop_future_planned(task_id, day)
         self.store.save()
 
     def mark_skipped(self, task_id: str, day: date) -> None:
@@ -144,6 +156,7 @@ class WeeklyService:
         else:
             assignment["status"] = "skipped"
             assignment["participants"] = []
+        self._drop_future_planned(task_id, day)
         self.store.save()
 
     def create_absence_request(
@@ -245,6 +258,18 @@ class WeeklyService:
     def _check_member(self, task_id: str, person_id: str) -> None:
         if person_id not in WEEKLY_TASKS[task_id]["roster"]:
             raise ValueError("Этот человек не входит в очередь этой работы.")
+
+    def _drop_future_planned(self, task_id: str, changed_day: date) -> None:
+        changed = changed_day.isoformat()
+        self.store.data["weekly_assignments"] = [
+            assignment
+            for assignment in self.store.data["weekly_assignments"]
+            if not (
+                assignment["task_id"] == task_id
+                and assignment["status"] == "planned"
+                and assignment["work_date"] > changed
+            )
+        ]
 
 
 class MorningService:
