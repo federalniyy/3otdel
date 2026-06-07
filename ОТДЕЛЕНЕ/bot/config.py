@@ -3,8 +3,6 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-from dotenv import load_dotenv
-
 from .constants import MOSCOW_TZ
 
 
@@ -17,7 +15,13 @@ class Config:
 
 
 def load_config() -> Config:
-    load_dotenv()
+    try:
+        from dotenv import load_dotenv
+    except ModuleNotFoundError:
+        pass
+    else:
+        load_dotenv()
+
     admin_id = os.getenv("ADMIN_TELEGRAM_ID")
     return Config(
         bot_token=os.getenv("BOT_TOKEN", "").strip(),
