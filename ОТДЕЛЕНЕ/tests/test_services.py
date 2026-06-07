@@ -16,13 +16,22 @@ class ServiceTest(unittest.TestCase):
     def tearDown(self) -> None:
         pass
 
-    def test_weekly_two_saturdays_on_one_off(self) -> None:
+    def test_dorm_weekly_runs_every_saturday(self) -> None:
         self.weekly.set_anchor("dorm_weekly", date(2026, 6, 13))
 
         self.assertTrue(self.weekly.is_cleaning_saturday("dorm_weekly", date(2026, 6, 13)))
         self.assertTrue(self.weekly.is_cleaning_saturday("dorm_weekly", date(2026, 6, 20)))
-        self.assertFalse(self.weekly.is_cleaning_saturday("dorm_weekly", date(2026, 6, 27)))
+        self.assertTrue(self.weekly.is_cleaning_saturday("dorm_weekly", date(2026, 6, 27)))
         self.assertTrue(self.weekly.is_cleaning_saturday("dorm_weekly", date(2026, 7, 4)))
+        self.assertFalse(self.weekly.is_cleaning_saturday("dorm_weekly", date(2026, 7, 5)))
+
+    def test_toilet_weekly_keeps_two_on_one_off_cycle(self) -> None:
+        self.weekly.set_anchor("toilet", date(2026, 6, 13))
+
+        self.assertTrue(self.weekly.is_cleaning_saturday("toilet", date(2026, 6, 13)))
+        self.assertTrue(self.weekly.is_cleaning_saturday("toilet", date(2026, 6, 20)))
+        self.assertFalse(self.weekly.is_cleaning_saturday("toilet", date(2026, 6, 27)))
+        self.assertTrue(self.weekly.is_cleaning_saturday("toilet", date(2026, 7, 4)))
 
     def test_seeded_dorm_weekly_history_counts_once(self) -> None:
         counts = self.weekly.counts("dorm_weekly")

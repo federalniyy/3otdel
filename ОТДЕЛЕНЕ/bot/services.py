@@ -44,8 +44,11 @@ class WeeklyService:
         return date.fromisoformat(self.store.data["settings"][f"{task_id}.anchor_date"])
 
     def is_cleaning_saturday(self, task_id: str, day: date) -> bool:
+        self._check_task(task_id)
         if day.weekday() != 5:
             return False
+        if task_id == "dorm_weekly":
+            return True
         weeks = (day - self.anchor(task_id)).days // 7
         return weeks >= 0 and weeks % 3 in (0, 1)
 

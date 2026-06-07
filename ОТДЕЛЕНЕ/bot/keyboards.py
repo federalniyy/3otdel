@@ -36,11 +36,15 @@ def admin_keyboard() -> InlineKeyboardMarkup:
 
 def weekly_admin_keyboard(task_id: str) -> InlineKeyboardMarkup:
     short = WEEKLY_TASKS[task_id]["short"]
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+    rows = []
+    if task_id == "toilet":
+        rows.append(
             [
                 InlineKeyboardButton(text=f"Старт круга: {short}", callback_data=f"admin:set_anchor:{task_id}"),
-            ],
+            ]
+        )
+    rows.extend(
+        [
             [
                 InlineKeyboardButton(text="Заменить назначенного", callback_data=f"admin:replace:{task_id}"),
             ],
@@ -58,6 +62,9 @@ def weekly_admin_keyboard(task_id: str) -> InlineKeyboardMarkup:
             ],
             [InlineKeyboardButton(text="Назад", callback_data="admin")],
         ]
+    )
+    return InlineKeyboardMarkup(
+        inline_keyboard=rows
     )
 
 
