@@ -2,17 +2,27 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
+from pathlib import Path
 
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from .config import load_config
-from .handlers import create_router
-from .notifications import notify_morning_for_tomorrow, notify_weekly_for_tomorrow
-from .services import MorningService, WeeklyService
-from .storage import JsonStore
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from bot.config import load_config
+    from bot.handlers import create_router
+    from bot.notifications import notify_morning_for_tomorrow, notify_weekly_for_tomorrow
+    from bot.services import MorningService, WeeklyService
+    from bot.storage import JsonStore
+else:
+    from .config import load_config
+    from .handlers import create_router
+    from .notifications import notify_morning_for_tomorrow, notify_weekly_for_tomorrow
+    from .services import MorningService, WeeklyService
+    from .storage import JsonStore
 
 
 async def main() -> None:
