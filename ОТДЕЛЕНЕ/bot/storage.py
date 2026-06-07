@@ -14,6 +14,11 @@ DORM_WEEKLY_HISTORY_SEED = (
     ("2026-05-23", (("kazakov", 0.5, "primary"), ("orlov", 0.5, "extra"))),
     ("2026-05-30", (("kurochkin", 1.0, "primary"),)),
 )
+DORM_WEEKLY_SOVENKO_HISTORY_SEED_KEY = "seed.dorm_weekly_sovenko_2026_05"
+DORM_WEEKLY_SOVENKO_HISTORY_SEED = (
+    ("2026-05-02", (("sovenko", 1.0, "primary"),)),
+    ("2026-05-09", (("sovenko", 1.0, "primary"),)),
+)
 
 
 class JsonStore:
@@ -77,6 +82,7 @@ class JsonStore:
                 DEFAULT_WEEKLY_ANCHOR,
             )
         self._seed_dorm_weekly_history()
+        self._seed_dorm_weekly_sovenko_history()
         self.save()
 
     def _seed_dorm_weekly_history(self) -> None:
@@ -115,6 +121,43 @@ class JsonStore:
             )
         ]
         self.data["settings"][DORM_WEEKLY_HISTORY_SEED_KEY] = "applied"
+
+    def _seed_dorm_weekly_sovenko_history(self) -> None:
+        if self.data["settings"].get(DORM_WEEKLY_SOVENKO_HISTORY_SEED_KEY) == "applied":
+            return
+
+        for work_date, participants in DORM_WEEKLY_SOVENKO_HISTORY_SEED:
+            self.data["weekly_assignments"] = [
+                assignment
+                for assignment in self.data["weekly_assignments"]
+                if not (
+                    assignment["task_id"] == "dorm_weekly"
+                    and assignment["work_date"] == work_date
+                )
+            ]
+            self.data["weekly_assignments"].append(
+                {
+                    "id": self.next_id("weekly_assignment"),
+                    "task_id": "dorm_weekly",
+                    "work_date": work_date,
+                    "status": "completed",
+                    "participants": [
+                        {"person_id": person_id, "weight": weight, "role": role}
+                        for person_id, weight, role in participants
+                    ],
+                }
+            )
+
+        self.data["weekly_assignments"] = [
+            assignment
+            for assignment in self.data["weekly_assignments"]
+            if not (
+                assignment["task_id"] == "dorm_weekly"
+                and assignment["status"] == "planned"
+                and assignment["work_date"] > DORM_WEEKLY_SOVENKO_HISTORY_SEED[-1][0]
+            )
+        ]
+        self.data["settings"][DORM_WEEKLY_SOVENKO_HISTORY_SEED_KEY] = "applied"
 
     def next_id(self, counter: str) -> int:
         self.data["counters"][counter] = int(self.data["counters"].get(counter, 0)) + 1

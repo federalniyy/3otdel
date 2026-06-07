@@ -31,16 +31,18 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(counts["kurochkin"], 1.0)
         self.assertEqual(counts["kazakov"], 0.5)
         self.assertEqual(counts["orlov"], 0.5)
+        self.assertEqual(counts["sovenko"], 2.0)
 
         self.store.bootstrap()
         history_items = [
             assignment
             for assignment in self.store.data["weekly_assignments"]
             if assignment["task_id"] == "dorm_weekly"
-            and assignment["work_date"] in {"2026-05-16", "2026-05-23", "2026-05-30"}
+            and assignment["work_date"]
+            in {"2026-05-02", "2026-05-09", "2026-05-16", "2026-05-23", "2026-05-30"}
         ]
 
-        self.assertEqual(len(history_items), 3)
+        self.assertEqual(len(history_items), 5)
 
     def test_toilet_does_not_reuse_dorm_person_same_week(self) -> None:
         day = date(2026, 6, 13)
