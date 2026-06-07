@@ -60,6 +60,14 @@ class ServiceTest(unittest.TestCase):
 
         self.assertEqual(second_after.participants[0][0], "sharov")
 
+    def test_record_completed_history_affects_next_pick(self) -> None:
+        self.weekly.record_completed("dorm_weekly", date(2026, 6, 7), ["sharov"])
+
+        next_assignment = self.weekly.ensure_assignment("dorm_weekly", date(2026, 6, 13))
+
+        self.assertEqual(self.weekly.counts("dorm_weekly")["sharov"], 1.0)
+        self.assertEqual(next_assignment.participants[0][0], "leontyev")
+
     def test_morning_pairs_follow_strict_odd_roster(self) -> None:
         first_day = self.morning.ensure_day(date(2026, 6, 8))
         second_day = self.morning.ensure_day(date(2026, 6, 9))
@@ -100,6 +108,16 @@ class ServiceTest(unittest.TestCase):
 
         self.assertEqual([slot.person_id for slot in restart_day], ["orlov", "pilugin"])
         self.assertEqual([slot.person_id for slot in next_day], ["sovenko", "kazakov"])
+
+    def test_morning_manual_slot_replacement_is_one_day_only(self) -> None:
+        self.morning.ensure_day(date(2026, 6, 8))
+
+        self.morning.replace_slot(date(2026, 6, 8), 1, "orlov")
+        changed_day = self.morning.get_day(date(2026, 6, 8))
+        next_day = self.morning.ensure_day(date(2026, 6, 9))
+
+        self.assertEqual([slot.person_id for slot in changed_day], ["orlov", "kurochkin"])
+        self.assertEqual([slot.person_id for slot in next_day], ["leontyev", "orlov"])
 
 
 if __name__ == "__main__":

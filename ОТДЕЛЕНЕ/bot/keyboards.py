@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from .constants import PEOPLE, WEEKLY_TASKS
+from .constants import MORNING_ROSTER, PEOPLE, PEOPLE_BY_ID, WEEKLY_TASKS
 
 
 def bind_keyboard() -> InlineKeyboardMarkup:
@@ -50,6 +50,12 @@ def weekly_admin_keyboard(task_id: str) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="Уборки не было", callback_data=f"admin:skip_weekly:{task_id}"),
             ],
+            [
+                InlineKeyboardButton(text="Внести последнюю субботу", callback_data=f"admin:history_last:{task_id}"),
+            ],
+            [
+                InlineKeyboardButton(text="История уборок", callback_data=f"admin:history_show:{task_id}"),
+            ],
             [InlineKeyboardButton(text="Назад", callback_data="admin")],
         ]
     )
@@ -62,10 +68,60 @@ def morning_admin_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="Утра не было", callback_data="admin:skip_morning"),
                 InlineKeyboardButton(text="Круг утра заново", callback_data="admin:restart_morning"),
             ],
+            [InlineKeyboardButton(text="Показать уборщиков на завтра", callback_data="admin:morning_tomorrow")],
             [InlineKeyboardButton(text="Утро на 7 дней", callback_data="morning7")],
             [InlineKeyboardButton(text="Назад", callback_data="admin")],
         ]
     )
+
+
+def people_keyboard(
+    callback_prefix: str,
+    person_ids: tuple[str, ...] | list[str],
+    back_callback: str | None = None,
+) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text=PEOPLE_BY_ID[person_id].name, callback_data=f"{callback_prefix}:{person_id}")]
+        for person_id in person_ids
+    ]
+    if back_callback:
+        rows.append([InlineKeyboardButton(text="Назад", callback_data=back_callback)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def morning_pair_keyboard(work_date: str) -> InlineKeyboardMarkup:
+    rows = []
+    for index, first_id in enumerate(MORNING_ROSTER):
+        second_id = MORNING_ROSTER[(index + 1) % len(MORNING_ROSTER)]
+        first = PEOPLE_BY_ID[first_id].name
+        second = PEOPLE_BY_ID[second_id].name
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{first} + {second}",
+                    callback_data=f"admin:morning_pair:{work_date}:{first_id}:{second_id}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(text="Назад", callback_data="admin:menu:morning")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def morning_tomorrow_keyboard(work_date: str, slots) -> InlineKeyboardMarkup:
+    rows = []
+    for slot in slots:
+        person_name = PEOPLE_BY_ID[slot.person_id].name
+        rows.append(
+            [
+                InlineKeyboardButton(text=person_name, callback_data="noop"),
+                InlineKeyboardButton(
+                    text="Заменить",
+                    callback_data=f"admin:replace_morning_slot:{work_date}:{slot.slot_no}",
+                ),
+            ]
+        )
+    rows.append([InlineKeyboardButton(text="Назад", callback_data="admin:menu:morning")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def weekly_cant_keyboard(task_id: str, work_date: str, person_id: str) -> InlineKeyboardMarkup:
