@@ -270,6 +270,9 @@ class WeeklyService:
                 continue
             for participant in assignment["participants"]:
                 counts[participant["person_id"]] += float(participant["weight"])
+        for person_id, offset in self.store.data.get("count_offsets", {}).get(task_id, {}).items():
+            if person_id in counts:
+                counts[person_id] += float(offset)
         return counts
 
     def history(self, task_id: str, limit: int = 10) -> list[WeeklyAssignment]:
