@@ -23,11 +23,15 @@ DORM_WEEKLY_LEONTYEV_HISTORY_SEED_KEY = "seed.dorm_weekly_leontyev_2026_06_06"
 DORM_WEEKLY_LEONTYEV_HISTORY_SEED = (
     ("2026-06-06", (("leontyev", 1.0, "primary"),)),
 )
-TOILET_BALANCE_SEED_KEY = "seed.toilet_balance_2026_06_08"
-TOILET_BALANCE_OFFSETS = {
-    "sovenko": -1.0,
-    "pilugin": 1.0,
-}
+TOILET_HISTORY_BALANCE_SEED_KEY = "seed.toilet_history_balance_2026_06_08"
+TOILET_HISTORY_BALANCE_SEED = (
+    ("2026-04-25", (("klyus", 1.0, "primary"),)),
+    ("2026-05-02", (("leontyev", 1.0, "primary"),)),
+    ("2026-05-09", (("orlov", 1.0, "primary"),)),
+    ("2026-05-16", (("pilugin", 1.0, "primary"),)),
+    ("2026-05-23", (("kazakov", 1.0, "primary"),)),
+    ("2026-05-30", (("pilugin", 1.0, "primary"),)),
+)
 
 
 class JsonStore:
@@ -62,7 +66,6 @@ class JsonStore:
         self.data.setdefault("settings", {})
         self.data.setdefault("weekly_assignments", [])
         self.data.setdefault("absence_requests", [])
-        self.data.setdefault("count_offsets", {})
         self.data.setdefault("morning_state", {"pointer": 0})
         self.data.setdefault("morning_days", {})
         self.data.setdefault("morning_debts", [])
@@ -94,7 +97,7 @@ class JsonStore:
         self._seed_dorm_weekly_history()
         self._seed_dorm_weekly_sovenko_history()
         self._seed_dorm_weekly_leontyev_history()
-        self._seed_toilet_balance()
+        self._seed_toilet_history_balance()
         self.save()
 
     def _seed_dorm_weekly_history(self) -> None:
@@ -208,20 +211,39 @@ class JsonStore:
         ]
         self.data["settings"][DORM_WEEKLY_LEONTYEV_HISTORY_SEED_KEY] = "applied"
 
-    def _seed_toilet_balance(self) -> None:
-        if self.data["settings"].get(TOILET_BALANCE_SEED_KEY) == "applied":
+    def _seed_toilet_history_balance(self) -> None:
+        if self.data["settings"].get(TOILET_HISTORY_BALANCE_SEED_KEY) == "applied":
             return
 
-        task_offsets = self.data["count_offsets"].setdefault("toilet", {})
-        for person_id, offset in TOILET_BALANCE_OFFSETS.items():
-            task_offsets[person_id] = float(task_offsets.get(person_id, 0)) + offset
+        self.data.get("count_offsets", {}).pop("toilet", None)
+        for work_date, participants in TOILET_HISTORY_BALANCE_SEED:
+            self.data["weekly_assignments"] = [
+                assignment
+                for assignment in self.data["weekly_assignments"]
+                if not (
+                    assignment["task_id"] == "toilet"
+                    and assignment["work_date"] == work_date
+                )
+            ]
+            self.data["weekly_assignments"].append(
+                {
+                    "id": self.next_id("weekly_assignment"),
+                    "task_id": "toilet",
+                    "work_date": work_date,
+                    "status": "completed",
+                    "participants": [
+                        {"person_id": person_id, "weight": weight, "role": role}
+                        for person_id, weight, role in participants
+                    ],
+                }
+            )
 
         self.data["weekly_assignments"] = [
             assignment
             for assignment in self.data["weekly_assignments"]
             if not (assignment["task_id"] == "toilet" and assignment["status"] == "planned")
         ]
-        self.data["settings"][TOILET_BALANCE_SEED_KEY] = "applied"
+        self.data["settings"][TOILET_HISTORY_BALANCE_SEED_KEY] = "applied"
 
     def next_id(self, counter: str) -> int:
         self.data["counters"][counter] = int(self.data["counters"].get(counter, 0)) + 1

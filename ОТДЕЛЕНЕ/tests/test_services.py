@@ -11,7 +11,6 @@ class ServiceTest(unittest.TestCase):
     def setUp(self) -> None:
         self.store = JsonStore(":memory:")
         self.store.data["weekly_assignments"] = []
-        self.store.data["count_offsets"] = {}
         self.weekly = WeeklyService(self.store)
         self.morning = MorningService(self.store)
 
@@ -77,15 +76,19 @@ class ServiceTest(unittest.TestCase):
         toilet_people = {person_id for person_id, _ in toilet.participants}
         self.assertTrue(dorm_people.isdisjoint(toilet_people))
 
-    def test_seeded_toilet_balance_makes_sovenko_next(self) -> None:
+    def test_seeded_toilet_history_makes_sovenko_next(self) -> None:
         seeded_store = JsonStore(":memory:")
         seeded_weekly = WeeklyService(seeded_store)
 
         counts = seeded_weekly.counts("toilet")
         assignment = seeded_weekly.ensure_assignment("toilet", date(2026, 6, 13))
 
-        self.assertEqual(counts["sovenko"], -1.0)
-        self.assertEqual(counts["pilugin"], 1.0)
+        self.assertEqual(counts["sovenko"], 0.0)
+        self.assertEqual(counts["klyus"], 1.0)
+        self.assertEqual(counts["leontyev"], 1.0)
+        self.assertEqual(counts["orlov"], 1.0)
+        self.assertEqual(counts["kazakov"], 1.0)
+        self.assertEqual(counts["pilugin"], 2.0)
         self.assertEqual(assignment.participants[0][0], "sovenko")
 
     def test_weekly_enhanced_cleanup_counts_half_for_each(self) -> None:
