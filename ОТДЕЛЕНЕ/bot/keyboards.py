@@ -178,6 +178,31 @@ def weekly_cant_keyboard(task_id: str, work_date: str, person_id: str) -> Inline
     )
 
 
+def weekly_done_keyboard(work_date: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Не было спальника",
+                    callback_data=f"weekly_done:missing:dorm_weekly:{work_date}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Не было туалета",
+                    callback_data=f"weekly_done:missing:toilet:{work_date}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Все было",
+                    callback_data=f"weekly_done:all:{work_date}",
+                )
+            ],
+        ]
+    )
+
+
 def morning_cant_keyboard(work_date: str, person_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[

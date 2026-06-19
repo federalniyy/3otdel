@@ -135,6 +135,40 @@ class ServiceTest(unittest.TestCase):
 
         self.assertEqual(second_after.participants[0][0], "sharov")
 
+    def test_past_weekly_planned_assignment_becomes_completed(self) -> None:
+        day = date(2026, 6, 13)
+        self.weekly.set_anchor("toilet", date(2026, 6, 20))
+        assignment = self.weekly.ensure_assignment("dorm_weekly", day)
+
+        self.assertEqual(assignment.status, "planned")
+        self.assertEqual(self.weekly.complete_past_planned(day), 0)
+        self.assertEqual(self.weekly.get_assignment("dorm_weekly", day).status, "planned")
+
+        self.assertEqual(self.weekly.complete_past_planned(date(2026, 6, 14)), 1)
+        self.assertEqual(self.weekly.get_assignment("dorm_weekly", day).status, "completed")
+        self.assertEqual(self.weekly.history("dorm_weekly")[0].work_date, day)
+
+    def test_past_weekly_autocomplete_creates_missing_saturday(self) -> None:
+        day = date(2026, 6, 13)
+
+        completed = self.weekly.complete_past_planned(date(2026, 6, 14))
+
+        self.assertEqual(completed, 2)
+        self.assertEqual(self.weekly.get_assignment("dorm_weekly", day).status, "completed")
+        self.assertEqual(self.weekly.get_assignment("toilet", day).status, "completed")
+
+    def test_weekly_done_missing_skips_one_and_completes_other(self) -> None:
+        day = date(2026, 6, 13)
+        self.weekly.ensure_assignment("dorm_weekly", day)
+        self.weekly.ensure_assignment("toilet", day)
+
+        self.weekly.mark_skipped("dorm_weekly", day)
+        completed = self.weekly.complete_scheduled_for_day(day, except_task="dorm_weekly")
+
+        self.assertEqual(completed, ["toilet"])
+        self.assertEqual(self.weekly.get_assignment("dorm_weekly", day).status, "skipped")
+        self.assertEqual(self.weekly.get_assignment("toilet", day).status, "completed")
+
     def test_record_completed_history_affects_next_pick(self) -> None:
         self.weekly.record_completed("dorm_weekly", date(2026, 6, 7), ["sharov"])
 

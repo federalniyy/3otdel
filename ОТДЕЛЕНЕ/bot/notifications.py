@@ -5,7 +5,13 @@ from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 
-from .keyboards import lender_cant_keyboard, morning_manual_keyboard, task_title, weekly_cant_keyboard
+from .keyboards import (
+    lender_cant_keyboard,
+    morning_manual_keyboard,
+    task_title,
+    weekly_cant_keyboard,
+    weekly_done_keyboard,
+)
 from .services import MorningService, WeeklyService
 from .storage import JsonStore
 from .utils import person_name
@@ -42,6 +48,37 @@ async def notify_weekly_for_tomorrow(
                 f"Завтра {tomorrow.strftime('%d.%m.%Y')}: {task_title(task_id)}. Доля: {weight:g}.",
                 reply_markup=weekly_cant_keyboard(task_id, tomorrow.isoformat(), person_id),
             )
+
+
+async def ask_weekly_done(
+    store: JsonStore,
+    weekly: WeeklyService,
+    bot: Bot,
+    timezone: str,
+) -> None:
+    today = datetime.now(ZoneInfo(timezone)).date()
+    if today.weekday() != 5:
+        return
+    lines = [f"Сегодня {today.strftime('%d.%m.%Y')} уборки были?"]
+    for task_id in ("dorm_weekly", "toilet"):
+        assignment = weekly.ensure_assignment(task_id, today)
+        if assignment is None:
+            lines.append(f"{task_title(task_id)}: не по графику")
+            continue
+        if assignment.status == "skipped":
+            lines.append(f"{task_title(task_id)}: уже отмечено, что не было")
+            continue
+        names = ", ".join(
+            f"{person_name(person_id)} ({weight:g})"
+            for person_id, weight in assignment.participants
+        )
+        lines.append(f"{task_title(task_id)}: {names}")
+    await notify_admins(
+        store,
+        bot,
+        "\n".join(lines),
+        reply_markup=weekly_done_keyboard(today.isoformat()),
+    )
 
 
 async def notify_morning_for_tomorrow(

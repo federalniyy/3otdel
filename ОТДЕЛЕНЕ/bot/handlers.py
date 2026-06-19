@@ -299,6 +299,36 @@ def create_router(
         )
         await callback.answer()
 
+    @router.callback_query(F.data.startswith("weekly_done:all:"))
+    async def weekly_done_all(callback: CallbackQuery) -> None:
+        if not await require_admin(callback):
+            return
+        work_date = callback.data.rsplit(":", 1)[1]
+        day = date.fromisoformat(work_date)
+        completed = weekly.complete_scheduled_for_day(day)
+        if completed:
+            names = ", ".join(WEEKLY_TASKS[task_id]["short"] for task_id in completed)
+            text = f"Засчитал за {day.strftime('%d.%m.%Y')}: {names}."
+        else:
+            text = f"За {day.strftime('%d.%m.%Y')} нечего засчитывать или уже все отмечено."
+        await callback.message.answer(text, reply_markup=admin_keyboard())
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("weekly_done:missing:"))
+    async def weekly_done_missing(callback: CallbackQuery) -> None:
+        if not await require_admin(callback):
+            return
+        _, _, task_id, work_date = callback.data.split(":")
+        day = date.fromisoformat(work_date)
+        weekly.mark_skipped(task_id, day)
+        completed = weekly.complete_scheduled_for_day(day, except_task=task_id)
+        text = f"Отметил: {WEEKLY_TASKS[task_id]['short']} {day.strftime('%d.%m.%Y')} не было."
+        if completed:
+            names = ", ".join(WEEKLY_TASKS[item]["short"] for item in completed)
+            text += f" Засчитал: {names}."
+        await callback.message.answer(text, reply_markup=admin_keyboard())
+        await callback.answer()
+
     @router.message(Form.set_anchor)
     async def set_anchor_value(message: Message, state: FSMContext) -> None:
         if not await require_admin(message):

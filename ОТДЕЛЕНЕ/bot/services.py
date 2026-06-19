@@ -201,6 +201,49 @@ class WeeklyService:
         self._drop_future_planned(task_id, day)
         self.store.save()
 
+    def complete_planned(self, task_id: str, day: date) -> bool:
+        assignment = self.ensure_assignment(task_id, day)
+        if assignment is None:
+            return False
+        raw = self.store.weekly_assignment(task_id, day.isoformat())
+        if raw is None or raw["status"] != "planned":
+            return False
+        raw["status"] = "completed"
+        self.store.save()
+        return True
+
+    def complete_scheduled_for_day(
+        self,
+        day: date,
+        except_task: str | None = None,
+    ) -> list[str]:
+        completed = []
+        for task_id in WEEKLY_TASKS:
+            if task_id == except_task:
+                continue
+            if self.complete_planned(task_id, day):
+                completed.append(task_id)
+        return completed
+
+    def complete_past_planned(self, today: date) -> int:
+        for task_id in WEEKLY_TASKS:
+            cursor = self.anchor(task_id)
+            while cursor < today:
+                if self.is_cleaning_saturday(task_id, cursor):
+                    self.ensure_assignment(task_id, cursor)
+                cursor += timedelta(days=1)
+        completed = 0
+        for assignment in self.store.data["weekly_assignments"]:
+            if assignment["status"] != "planned":
+                continue
+            if date.fromisoformat(assignment["work_date"]) >= today:
+                continue
+            assignment["status"] = "completed"
+            completed += 1
+        if completed:
+            self.store.save()
+        return completed
+
     def create_absence_request(
         self,
         task_kind: str,
