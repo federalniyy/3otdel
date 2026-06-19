@@ -12,7 +12,9 @@ from aiogram.types import CallbackQuery, Message
 from .constants import MORNING_ROSTER, WEEKLY_TASKS
 from .keyboards import (
     absence_admin_keyboard,
+    account_bindings_keyboard,
     admin_keyboard,
+    binding_people_keyboard,
     bind_keyboard,
     main_keyboard,
     morning_admin_keyboard,
@@ -59,6 +61,25 @@ def create_router(
             days_since_saturday = 7
         return current - timedelta(days=days_since_saturday)
 
+    def remember_user(message_or_callback: Message | CallbackQuery) -> None:
+        user = message_or_callback.from_user
+        message = (
+            message_or_callback.message
+            if isinstance(message_or_callback, CallbackQuery)
+            else message_or_callback
+        )
+        store.remember_account(
+            user.id,
+            message.chat.id,
+            username=user.username,
+            first_name=user.first_name,
+            last_name=user.last_name,
+            full_name=user.full_name,
+        )
+        person = store.person_by_telegram(user.id)
+        if person and person.get("chat_id") != message.chat.id:
+            store.bind_person(person["id"], user.id, message.chat.id, force=True)
+
     def bound_person(user_id: int) -> dict | None:
         return store.person_by_telegram(user_id)
 
@@ -79,6 +100,7 @@ def create_router(
 
     @router.message(CommandStart())
     async def start(message: Message) -> None:
+        remember_user(message)
         person = bound_person(message.from_user.id)
         if person:
             await message.answer(
@@ -90,8 +112,17 @@ def create_router(
 
     @router.callback_query(F.data.startswith("bind:"))
     async def bind(callback: CallbackQuery) -> None:
+        remember_user(callback)
         person_id = callback.data.split(":", 1)[1]
-        store.bind_person(person_id, callback.from_user.id, callback.message.chat.id)
+        current_person = bound_person(callback.from_user.id)
+        if current_person and current_person["id"] != person_id:
+            await callback.answer("Ты уже привязан. Перепривязку делает администратор.", show_alert=True)
+            return
+        try:
+            store.bind_person(person_id, callback.from_user.id, callback.message.chat.id)
+        except ValueError as error:
+            await callback.answer(str(error), show_alert=True)
+            return
         person = store.data["people"][person_id]
         await callback.message.edit_text(
             f"Готово, ты привязан как {person['display_name']}.",
@@ -101,15 +132,18 @@ def create_router(
 
     @router.message(Command("menu"))
     async def menu(message: Message) -> None:
+        remember_user(message)
         person = bound_person(message.from_user.id)
         await message.answer("Меню", reply_markup=main_keyboard(bool(person and person.get("is_admin"))))
 
     @router.message(Command("queue"))
     async def queue_command(message: Message) -> None:
+        remember_user(message)
         await send_queue(message)
 
     @router.callback_query(F.data == "queue3")
     async def queue_callback(callback: CallbackQuery) -> None:
+        remember_user(callback)
         await send_queue(callback.message)
         await callback.answer()
 
@@ -120,21 +154,66 @@ def create_router(
 
     @router.callback_query(F.data == "morning7")
     async def morning_callback(callback: CallbackQuery) -> None:
+        remember_user(callback)
         lines = morning.preview(today(), 7)
         await callback.message.answer("Утренние уборки на 7 дней:\n" + "\n".join(lines))
         await callback.answer()
 
     @router.message(Command("admin"))
     async def admin_command(message: Message) -> None:
+        remember_user(message)
         if not await require_admin(message):
             return
         await message.answer("Админ-панель", reply_markup=admin_keyboard())
 
     @router.callback_query(F.data == "admin")
     async def admin_callback(callback: CallbackQuery) -> None:
+        remember_user(callback)
         if not await require_admin(callback):
             return
         await callback.message.answer("Админ-панель", reply_markup=admin_keyboard())
+        await callback.answer()
+
+    @router.callback_query(F.data == "admin:bindings")
+    async def admin_bindings(callback: CallbackQuery) -> None:
+        remember_user(callback)
+        if not await require_admin(callback):
+            return
+        accounts = store.known_accounts()
+        text = "Выбери Telegram-аккаунт, который нужно закрепить за фамилией."
+        if not accounts:
+            text = "Пока нет аккаунтов. Человек должен хотя бы раз открыть бота."
+        await callback.message.answer(text, reply_markup=account_bindings_keyboard(accounts))
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("admin:binding_account:"))
+    async def admin_binding_account(callback: CallbackQuery) -> None:
+        remember_user(callback)
+        if not await require_admin(callback):
+            return
+        telegram_id = int(callback.data.rsplit(":", 1)[1])
+        await callback.message.answer(
+            "К какой фамилии привязать этот Telegram-аккаунт?",
+            reply_markup=binding_people_keyboard(telegram_id),
+        )
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("admin:bind_account_to:"))
+    async def admin_bind_account_to(callback: CallbackQuery) -> None:
+        remember_user(callback)
+        if not await require_admin(callback):
+            return
+        _, _, telegram_id, person_id = callback.data.split(":")
+        try:
+            store.force_bind_person(person_id, int(telegram_id))
+        except ValueError as error:
+            await callback.answer(str(error), show_alert=True)
+            return
+        person = store.data["people"][person_id]
+        await callback.message.answer(
+            f"Готово: аккаунт id {telegram_id} закреплен за {person['display_name']}.",
+            reply_markup=account_bindings_keyboard(store.known_accounts()),
+        )
         await callback.answer()
 
     @router.callback_query(F.data.startswith("admin:menu:"))

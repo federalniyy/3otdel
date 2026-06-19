@@ -63,6 +63,7 @@ class JsonStore:
 
     def bootstrap(self) -> None:
         self.data.setdefault("people", {})
+        self.data.setdefault("telegram_accounts", {})
         self.data.setdefault("settings", {})
         self.data.setdefault("weekly_assignments", [])
         self.data.setdefault("absence_requests", [])
@@ -256,11 +257,98 @@ class JsonStore:
         self.data["people"]["sharov"]["is_admin"] = True
         self.save()
 
-    def bind_person(self, person_id: str, telegram_id: int, chat_id: int) -> None:
+    def remember_account(
+        self,
+        telegram_id: int,
+        chat_id: int,
+        username: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        full_name: str | None = None,
+    ) -> None:
+        account = self.data["telegram_accounts"].setdefault(str(telegram_id), {})
+        account["telegram_id"] = telegram_id
+        account["chat_id"] = chat_id
+        account["username"] = username
+        account["first_name"] = first_name
+        account["last_name"] = last_name
+        account["full_name"] = full_name or " ".join(
+            item for item in (first_name, last_name) if item
+        )
+        self.save()
+
+    def bind_person(
+        self,
+        person_id: str,
+        telegram_id: int,
+        chat_id: int,
+        *,
+        force: bool = False,
+    ) -> None:
+        current = self.data["people"].get(person_id)
+        if (
+            current
+            and current.get("telegram_id") is not None
+            and current.get("telegram_id") != telegram_id
+            and not force
+        ):
+            raise ValueError("Эта фамилия уже привязана администратором.")
+        for other_id, other in self.data["people"].items():
+            if other_id != person_id and other.get("telegram_id") == telegram_id:
+                other["telegram_id"] = None
+                other["chat_id"] = None
         person = self.data["people"][person_id]
         person["telegram_id"] = telegram_id
         person["chat_id"] = chat_id
         self.save()
+
+    def force_bind_person(self, person_id: str, telegram_id: int) -> None:
+        account = self.data["telegram_accounts"].get(str(telegram_id))
+        if account is None:
+            for person in self.data["people"].values():
+                if person.get("telegram_id") == telegram_id:
+                    account = {
+                        "telegram_id": telegram_id,
+                        "chat_id": person.get("chat_id"),
+                    }
+                    break
+        if not account or account.get("chat_id") is None:
+            raise ValueError("Этот аккаунт еще не писал боту.")
+        self.bind_person(person_id, telegram_id, int(account["chat_id"]), force=True)
+
+    def known_accounts(self) -> list[dict[str, Any]]:
+        accounts = {
+            int(account["telegram_id"]): deepcopy(account)
+            for account in self.data.get("telegram_accounts", {}).values()
+            if account.get("telegram_id") is not None and account.get("chat_id") is not None
+        }
+        for person in self.data["people"].values():
+            telegram_id = person.get("telegram_id")
+            if telegram_id is None or person.get("chat_id") is None:
+                continue
+            accounts.setdefault(
+                int(telegram_id),
+                {
+                    "telegram_id": int(telegram_id),
+                    "chat_id": person["chat_id"],
+                    "username": None,
+                    "first_name": None,
+                    "last_name": None,
+                    "full_name": None,
+                },
+            )
+        for account in accounts.values():
+            bound = self.person_by_telegram(int(account["telegram_id"]))
+            account["person_id"] = bound["id"] if bound else None
+            account["person_name"] = bound["display_name"] if bound else None
+        return sorted(
+            accounts.values(),
+            key=lambda item: (
+                item.get("username") or "",
+                item.get("full_name") or "",
+                str(item["telegram_id"]),
+            ),
+        )
 
     def person_by_telegram(self, telegram_id: int) -> dict[str, Any] | None:
         for person in self.data["people"].values():

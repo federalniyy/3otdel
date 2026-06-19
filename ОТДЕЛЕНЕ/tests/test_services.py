@@ -91,6 +91,26 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(counts["pilugin"], 2.0)
         self.assertEqual(assignment.participants[0][0], "sovenko")
 
+    def test_regular_bind_does_not_overwrite_occupied_person(self) -> None:
+        self.store.bind_person("orlov", 101, 201)
+
+        with self.assertRaises(ValueError):
+            self.store.bind_person("orlov", 102, 202)
+
+        self.assertEqual(self.store.data["people"]["orlov"]["telegram_id"], 101)
+
+    def test_force_bind_moves_account_to_selected_person(self) -> None:
+        self.store.remember_account(101, 201, username="serzhop", full_name="Sergey")
+        self.store.bind_person("orlov", 101, 201)
+
+        self.store.force_bind_person("leontyev", 101)
+
+        self.assertIsNone(self.store.data["people"]["orlov"]["telegram_id"])
+        self.assertEqual(self.store.data["people"]["leontyev"]["telegram_id"], 101)
+        account = next(item for item in self.store.known_accounts() if item["telegram_id"] == 101)
+        self.assertEqual(account["username"], "serzhop")
+        self.assertEqual(account["person_id"], "leontyev")
+
     def test_weekly_enhanced_cleanup_counts_half_for_each(self) -> None:
         day = date(2026, 6, 13)
         assignment = self.weekly.ensure_assignment("dorm_weekly", day)

@@ -29,6 +29,7 @@ def admin_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Очередь туалета", callback_data="admin:menu:toilet")],
             [InlineKeyboardButton(text="Очередь спальника, суббота", callback_data="admin:menu:dorm_weekly")],
             [InlineKeyboardButton(text="Очередь спальника, утро", callback_data="admin:menu:morning")],
+            [InlineKeyboardButton(text="Привязки аккаунтов", callback_data="admin:bindings")],
             [InlineKeyboardButton(text="Очередь на 3 недели", callback_data="queue3")],
         ]
     )
@@ -93,6 +94,39 @@ def people_keyboard(
     ]
     if back_callback:
         rows.append([InlineKeyboardButton(text="Назад", callback_data=back_callback)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def account_bindings_keyboard(accounts: list[dict]) -> InlineKeyboardMarkup:
+    rows = []
+    for account in accounts:
+        username = account.get("username")
+        full_name = account.get("full_name")
+        bound_name = account.get("person_name") or "не привязан"
+        title = f"@{username}" if username else (full_name or f"id {account['telegram_id']}")
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{title} -> {bound_name}",
+                    callback_data=f"admin:binding_account:{account['telegram_id']}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(text="Назад", callback_data="admin")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def binding_people_keyboard(telegram_id: int) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=person.name,
+                callback_data=f"admin:bind_account_to:{telegram_id}:{person.id}",
+            )
+        ]
+        for person in PEOPLE
+    ]
+    rows.append([InlineKeyboardButton(text="Назад", callback_data="admin:bindings")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
