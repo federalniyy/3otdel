@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 
-from .keyboards import lender_cant_keyboard, morning_cant_keyboard, morning_manual_keyboard, task_title, weekly_cant_keyboard
+from .keyboards import lender_cant_keyboard, morning_manual_keyboard, task_title, weekly_cant_keyboard
 from .services import MorningService, WeeklyService
 from .storage import JsonStore
 from .utils import person_name
@@ -69,7 +69,6 @@ async def notify_morning_for_tomorrow(
         await bot.send_message(
             people[0]["chat_id"],
             text,
-            reply_markup=morning_cant_keyboard(tomorrow.isoformat(), slot.person_id),
         )
 
 

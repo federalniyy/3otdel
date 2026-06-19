@@ -164,7 +164,7 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual([slot.person_id for slot in restart_day], ["orlov", "pilugin"])
         self.assertEqual([slot.person_id for slot in next_day], ["sovenko", "kazakov"])
 
-    def test_morning_manual_slot_replacement_is_one_day_only(self) -> None:
+    def test_morning_manual_slot_replacement_creates_debt(self) -> None:
         self.morning.ensure_day(date(2026, 6, 8))
 
         self.morning.replace_slot(date(2026, 6, 8), 1, "orlov")
@@ -172,7 +172,15 @@ class ServiceTest(unittest.TestCase):
         next_day = self.morning.ensure_day(date(2026, 6, 9))
 
         self.assertEqual([slot.person_id for slot in changed_day], ["orlov", "kurochkin"])
-        self.assertEqual([slot.person_id for slot in next_day], ["leontyev", "orlov"])
+        self.assertEqual([slot.person_id for slot in next_day], ["leontyev", "lavrentyev"])
+
+    def test_morning_manual_replacement_rebuilds_generated_future_for_debt(self) -> None:
+        self.morning.preview(date(2026, 6, 8), 7)
+
+        self.morning.replace_slot(date(2026, 6, 8), 1, "orlov")
+        next_day = self.morning.ensure_day(date(2026, 6, 9))
+
+        self.assertEqual([slot.person_id for slot in next_day], ["leontyev", "lavrentyev"])
 
 
 if __name__ == "__main__":

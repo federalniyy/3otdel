@@ -457,6 +457,7 @@ class MorningService:
                 "status": "open",
             }
         )
+        self._drop_future_days_after(day)
         self.store.save()
         return lender_id, debt_id
 
@@ -479,6 +480,7 @@ class MorningService:
                 slot["source"] = "manual_borrow"
                 break
         debt["lender_id"] = replacement_id
+        self._drop_future_days_after(date.fromisoformat(debt["created_for_date"]))
         self.store.save()
 
     def replace_slot(self, day: date, slot_no: int, replacement_id: str) -> None:
@@ -486,13 +488,49 @@ class MorningService:
             raise ValueError("Этот человек не участвует в утренней очереди.")
         self.ensure_day(day)
         record = self.store.data["morning_days"][day.isoformat()]
+        assigned_elsewhere = {
+            slot["person_id"]
+            for slot in record["slots"]
+            if slot["slot_no"] != slot_no
+        }
+        if replacement_id in assigned_elsewhere:
+            raise ValueError("Этот человек уже назначен на эту утреннюю уборку.")
         for slot in record["slots"]:
             if slot["slot_no"] == slot_no:
+                borrower_id = slot["person_id"]
+                if borrower_id == replacement_id:
+                    return
                 slot["person_id"] = replacement_id
-                slot["source"] = "manual_replace"
+                slot["source"] = "manual_borrow"
+                self.store.data["morning_debts"].append(
+                    {
+                        "id": self.store.next_id("morning_debt"),
+                        "borrower_id": borrower_id,
+                        "lender_id": replacement_id,
+                        "created_for_date": day.isoformat(),
+                        "paid_date": None,
+                        "status": "open",
+                    }
+                )
+                self._drop_future_days_after(day)
                 self.store.save()
                 return
         raise ValueError("Не нашел это место в утренней уборке.")
+
+    def _drop_future_days_after(self, day: date) -> None:
+        key = day.isoformat()
+        future_keys = sorted(
+            work_date for work_date in self.store.data["morning_days"] if work_date > key
+        )
+        for debt in self.store.data["morning_debts"]:
+            if debt.get("paid_date") in future_keys:
+                debt["status"] = "open"
+                debt["paid_date"] = None
+        for future_key in future_keys:
+            del self.store.data["morning_days"][future_key]
+        record = self.store.data["morning_days"].get(key)
+        if record is not None:
+            self.store.data["morning_state"]["pointer"] = record["pointer_after"]
 
     def mark_skipped(self, day: date) -> None:
         self.ensure_day(day)
