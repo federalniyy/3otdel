@@ -44,6 +44,16 @@ TOILET_ROSTER = (
     "kazakov",
 )
 
+FLIGHT_DECK_ROSTER = (
+    "sharov",
+    "klyus",
+    "leontyev",
+    "orlov",
+    "pilugin",
+    "sovenko",
+    "kazakov",
+)
+
 MORNING_ROSTER = (
     "lavrentyev",
     "kurochkin",
@@ -59,11 +69,22 @@ WEEKLY_TASKS = {
         "title": "субботняя уборка спального помещения",
         "short": "спальник",
         "roster": DORM_WEEKLY_ROSTER,
+        "schedule": "weekly",
+        "weight_mode": "split",
     },
     "toilet": {
         "title": "уборка туалета",
         "short": "туалет",
         "roster": TOILET_ROSTER,
+        "schedule": "two_on_one_off",
+        "weight_mode": "per_person",
+    },
+    "flight_deck": {
+        "title": "субботняя взлетка",
+        "short": "взлетка",
+        "roster": FLIGHT_DECK_ROSTER,
+        "schedule": "weekly",
+        "weight_mode": "split",
     },
 }
 

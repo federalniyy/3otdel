@@ -47,7 +47,8 @@ class WeeklyService:
         self._check_task(task_id)
         if day.weekday() != 5:
             return False
-        if task_id == "dorm_weekly":
+        schedule = WEEKLY_TASKS[task_id].get("schedule")
+        if schedule == "weekly":
             return True
         weeks = (day - self.anchor(task_id)).days // 7
         return weeks >= 0 and weeks % 3 in (0, 1)
@@ -86,7 +87,7 @@ class WeeklyService:
             status=assignment["status"],
             participants=tuple(
                 (participant["person_id"], float(participant["weight"]))
-                for participant in sorted(assignment["participants"], key=lambda item: item["role"])
+                for participant in sorted(assignment["participants"], key=self._participant_sort_key)
             ),
         )
 
@@ -138,10 +139,14 @@ class WeeklyService:
             raise ValueError("Этот человек уже стоит в назначении.")
         if len(assignment["participants"]) >= 2:
             raise ValueError("Для усиленной уборки уже назначены два человека.")
-        for participant in assignment["participants"]:
-            participant["weight"] = 0.5
+        if WEEKLY_TASKS[task_id].get("weight_mode") == "per_person":
+            weight = 1.0
+        else:
+            weight = 0.5
+            for participant in assignment["participants"]:
+                participant["weight"] = 0.5
         assignment["participants"].append(
-            {"person_id": person_id, "weight": 0.5, "role": "extra"}
+            {"person_id": person_id, "weight": weight, "role": "extra"}
         )
         if assignment["status"] == "skipped":
             assignment["status"] = "planned"
@@ -159,7 +164,7 @@ class WeeklyService:
             raise ValueError("Нужно выбрать хотя бы одного человека.")
         for person_id in person_ids:
             self._check_member(task_id, person_id)
-        weight = 1.0 / len(person_ids)
+        weight = 1.0 if WEEKLY_TASKS[task_id].get("weight_mode") == "per_person" else 1.0 / len(person_ids)
         self.store.data["weekly_assignments"] = [
             assignment
             for assignment in self.store.data["weekly_assignments"]
@@ -315,6 +320,19 @@ class WeeklyService:
                 counts[participant["person_id"]] += float(participant["weight"])
         return counts
 
+    def last_dates(self, task_id: str) -> dict[str, date | None]:
+        roster = WEEKLY_TASKS[task_id]["roster"]
+        last = {person_id: None for person_id in roster}
+        for assignment in self.store.data["weekly_assignments"]:
+            if assignment["task_id"] != task_id or assignment["status"] not in ("planned", "completed"):
+                continue
+            work_date = date.fromisoformat(assignment["work_date"])
+            for participant in assignment["participants"]:
+                person_id = participant["person_id"]
+                if person_id in last and (last[person_id] is None or work_date > last[person_id]):
+                    last[person_id] = work_date
+        return last
+
     def history(self, task_id: str, limit: int = 10) -> list[WeeklyAssignment]:
         self._check_task(task_id)
         assignments = [
@@ -341,11 +359,19 @@ class WeeklyService:
     def _pick_person(self, task_id: str, day: date) -> str:
         roster = WEEKLY_TASKS[task_id]["roster"]
         counts = self.counts(task_id)
+        last_dates = self.last_dates(task_id)
         blocked = self._same_week_participants(day, except_task=task_id)
         candidates = [person_id for person_id in roster if person_id not in blocked]
         if not candidates:
             candidates = list(roster)
-        return min(candidates, key=lambda person_id: (counts[person_id], roster.index(person_id)))
+        return min(
+            candidates,
+            key=lambda person_id: (
+                counts[person_id],
+                last_dates[person_id] or date.min,
+                roster.index(person_id),
+            ),
+        )
 
     def _same_week_participants(self, day: date, except_task: str) -> set[str]:
         monday = day - timedelta(days=day.weekday())
@@ -358,6 +384,11 @@ class WeeklyService:
             if monday <= work_date <= sunday:
                 blocked.update(participant["person_id"] for participant in assignment["participants"])
         return blocked
+
+    @staticmethod
+    def _participant_sort_key(participant: dict) -> tuple[int, str]:
+        role_order = {"primary": 0, "extra": 1}
+        return role_order.get(participant.get("role"), 99), participant.get("person_id", "")
 
     def _check_task(self, task_id: str) -> None:
         if task_id not in WEEKLY_TASKS:

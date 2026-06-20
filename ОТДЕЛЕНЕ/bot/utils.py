@@ -7,7 +7,7 @@ from .constants import PEOPLE, PEOPLE_BY_ID
 
 def parse_date(value: str) -> date:
     value = value.strip()
-    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%d.%m"):
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%d.%m.%y", "%d.%m"):
         try:
             parsed = datetime.strptime(value, fmt)
         except ValueError:

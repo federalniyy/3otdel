@@ -373,7 +373,7 @@ def create_router(
             await message.answer(
                 "Кого заменить?",
                 reply_markup=people_keyboard(
-                    f"admin:weekly_replace_old:{data['task_id']}:{day.isoformat()}",
+                    f"wr_old:{data['task_id']}:{day.strftime('%Y%m%d')}",
                     participants,
                     back_callback=f"admin:menu:{data['task_id']}",
                 ),
@@ -383,33 +383,33 @@ def create_router(
         await message.answer(
             "Кого поставить вместо него?",
             reply_markup=people_keyboard(
-                f"admin:weekly_replace_new:{data['task_id']}:{day.isoformat()}:{old_person}",
+                f"wr_new:{data['task_id']}:{day.strftime('%Y%m%d')}:{old_person}",
                 WEEKLY_TASKS[data["task_id"]]["roster"],
                 back_callback=f"admin:menu:{data['task_id']}",
             ),
         )
 
-    @router.callback_query(F.data.startswith("admin:weekly_replace_old:"))
+    @router.callback_query(F.data.startswith("wr_old:"))
     async def weekly_replace_old(callback: CallbackQuery) -> None:
         if not await require_admin(callback):
             return
-        _, _, task_id, work_date, old_person = callback.data.split(":")
+        _, task_id, work_date, old_person = callback.data.split(":")
         await callback.message.answer(
             "Кого поставить вместо него?",
             reply_markup=people_keyboard(
-                f"admin:weekly_replace_new:{task_id}:{work_date}:{old_person}",
+                f"wr_new:{task_id}:{work_date}:{old_person}",
                 WEEKLY_TASKS[task_id]["roster"],
                 back_callback=f"admin:menu:{task_id}",
             ),
         )
         await callback.answer()
 
-    @router.callback_query(F.data.startswith("admin:weekly_replace_new:"))
+    @router.callback_query(F.data.startswith("wr_new:"))
     async def weekly_replace_new(callback: CallbackQuery) -> None:
         if not await require_admin(callback):
             return
-        _, _, task_id, work_date, old_person, new_person = callback.data.split(":")
-        day = date.fromisoformat(work_date)
+        _, task_id, work_date, old_person, new_person = callback.data.split(":")
+        day = datetime.strptime(work_date, "%Y%m%d").date()
         try:
             weekly.replace_person(task_id, day, new_person, None if old_person == "none" else old_person)
         except ValueError as error:

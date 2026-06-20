@@ -23,14 +23,25 @@ DORM_WEEKLY_LEONTYEV_HISTORY_SEED_KEY = "seed.dorm_weekly_leontyev_2026_06_06"
 DORM_WEEKLY_LEONTYEV_HISTORY_SEED = (
     ("2026-06-06", (("leontyev", 1.0, "primary"),)),
 )
-TOILET_HISTORY_BALANCE_SEED_KEY = "seed.toilet_history_balance_2026_06_08"
+TOILET_HISTORY_BALANCE_SEED_KEY = "seed.toilet_history_from_excel_2026_06_20_v1"
 TOILET_HISTORY_BALANCE_SEED = (
-    ("2026-04-25", (("klyus", 1.0, "primary"),)),
-    ("2026-05-02", (("leontyev", 1.0, "primary"),)),
-    ("2026-05-09", (("orlov", 1.0, "primary"),)),
-    ("2026-05-16", (("pilugin", 1.0, "primary"),)),
-    ("2026-05-23", (("kazakov", 1.0, "primary"),)),
-    ("2026-05-30", (("pilugin", 1.0, "primary"),)),
+    ("2026-03-28", (("klyus", 1.0, "primary"), ("kazakov", 1.0, "extra"))),
+    ("2026-04-04", (("klyus", 1.0, "primary"), ("orlov", 1.0, "extra"))),
+    ("2026-04-11", (("pilugin", 1.0, "primary"),)),
+    ("2026-04-18", (("leontyev", 1.0, "primary"),)),
+    ("2026-04-25", (("sovenko", 1.0, "primary"),)),
+    ("2026-05-02", (("orlov", 1.0, "primary"),)),
+    ("2026-05-09", (("kazakov", 1.0, "primary"),)),
+    ("2026-05-16", (("leontyev", 1.0, "primary"), ("pilugin", 1.0, "extra"))),
+    ("2026-05-23", (("sovenko", 1.0, "primary"),)),
+    ("2026-05-30", (("kazakov", 1.0, "primary"),)),
+    ("2026-06-06", (("pilugin", 1.0, "primary"),)),
+    ("2026-06-13", (("pilugin", 1.0, "primary"),)),
+    ("2026-06-20", (("orlov", 1.0, "primary"), ("klyus", 1.0, "extra"))),
+)
+FLIGHT_DECK_HISTORY_SEED_KEY = "seed.flight_deck_sharov_2026_06_20"
+FLIGHT_DECK_HISTORY_SEED = (
+    ("2026-06-20", (("sharov", 1.0, "primary"),)),
 )
 
 
@@ -99,6 +110,7 @@ class JsonStore:
         self._seed_dorm_weekly_sovenko_history()
         self._seed_dorm_weekly_leontyev_history()
         self._seed_toilet_history_balance()
+        self._seed_flight_deck_history()
         self.save()
 
     def _seed_dorm_weekly_history(self) -> None:
@@ -217,15 +229,12 @@ class JsonStore:
             return
 
         self.data.get("count_offsets", {}).pop("toilet", None)
+        self.data["weekly_assignments"] = [
+            assignment
+            for assignment in self.data["weekly_assignments"]
+            if assignment["task_id"] != "toilet"
+        ]
         for work_date, participants in TOILET_HISTORY_BALANCE_SEED:
-            self.data["weekly_assignments"] = [
-                assignment
-                for assignment in self.data["weekly_assignments"]
-                if not (
-                    assignment["task_id"] == "toilet"
-                    and assignment["work_date"] == work_date
-                )
-            ]
             self.data["weekly_assignments"].append(
                 {
                     "id": self.next_id("weekly_assignment"),
@@ -239,12 +248,39 @@ class JsonStore:
                 }
             )
 
+        self.data["settings"][TOILET_HISTORY_BALANCE_SEED_KEY] = "applied"
+
+    def _seed_flight_deck_history(self) -> None:
+        if self.data["settings"].get(FLIGHT_DECK_HISTORY_SEED_KEY) == "applied":
+            return
+
+        for work_date, participants in FLIGHT_DECK_HISTORY_SEED:
+            self.data["weekly_assignments"] = [
+                assignment
+                for assignment in self.data["weekly_assignments"]
+                if not (
+                    assignment["task_id"] == "flight_deck"
+                    and assignment["work_date"] == work_date
+                )
+            ]
+            self.data["weekly_assignments"].append(
+                {
+                    "id": self.next_id("weekly_assignment"),
+                    "task_id": "flight_deck",
+                    "work_date": work_date,
+                    "status": "completed",
+                    "participants": [
+                        {"person_id": person_id, "weight": weight, "role": role}
+                        for person_id, weight, role in participants
+                    ],
+                }
+            )
         self.data["weekly_assignments"] = [
             assignment
             for assignment in self.data["weekly_assignments"]
-            if not (assignment["task_id"] == "toilet" and assignment["status"] == "planned")
+            if not (assignment["task_id"] == "flight_deck" and assignment["status"] == "planned")
         ]
-        self.data["settings"][TOILET_HISTORY_BALANCE_SEED_KEY] = "applied"
+        self.data["settings"][FLIGHT_DECK_HISTORY_SEED_KEY] = "applied"
 
     def next_id(self, counter: str) -> int:
         self.data["counters"][counter] = int(self.data["counters"].get(counter, 0)) + 1

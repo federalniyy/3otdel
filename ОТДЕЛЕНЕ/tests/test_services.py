@@ -76,20 +76,40 @@ class ServiceTest(unittest.TestCase):
         toilet_people = {person_id for person_id, _ in toilet.participants}
         self.assertTrue(dorm_people.isdisjoint(toilet_people))
 
-    def test_seeded_toilet_history_makes_sovenko_next(self) -> None:
+    def test_seeded_toilet_history_from_excel_counts_and_last_date(self) -> None:
         seeded_store = JsonStore(":memory:")
         seeded_weekly = WeeklyService(seeded_store)
 
         counts = seeded_weekly.counts("toilet")
-        assignment = seeded_weekly.ensure_assignment("toilet", date(2026, 6, 13))
+        last_dates = seeded_weekly.last_dates("toilet")
 
-        self.assertEqual(counts["sovenko"], 0.0)
-        self.assertEqual(counts["klyus"], 1.0)
-        self.assertEqual(counts["leontyev"], 1.0)
-        self.assertEqual(counts["orlov"], 1.0)
-        self.assertEqual(counts["kazakov"], 1.0)
-        self.assertEqual(counts["pilugin"], 2.0)
-        self.assertEqual(assignment.participants[0][0], "sovenko")
+        self.assertEqual(counts["klyus"], 3.0)
+        self.assertEqual(counts["leontyev"], 2.0)
+        self.assertEqual(counts["orlov"], 3.0)
+        self.assertEqual(counts["pilugin"], 4.0)
+        self.assertEqual(counts["sovenko"], 2.0)
+        self.assertEqual(counts["kazakov"], 3.0)
+        self.assertEqual(last_dates["orlov"], date(2026, 6, 20))
+        self.assertEqual(last_dates["klyus"], date(2026, 6, 20))
+
+    def test_toilet_tie_breaker_uses_oldest_last_date(self) -> None:
+        self.store.data["weekly_assignments"] = []
+        self.weekly.record_completed("toilet", date(2026, 6, 6), ["klyus"])
+        self.weekly.record_completed("toilet", date(2026, 6, 13), ["leontyev"])
+
+        assignment = self.weekly.ensure_assignment("toilet", date(2026, 6, 20))
+
+        self.assertEqual(assignment.participants[0][0], "orlov")
+
+    def test_flight_deck_seed_and_roster(self) -> None:
+        seeded_store = JsonStore(":memory:")
+        seeded_weekly = WeeklyService(seeded_store)
+        assignment = seeded_weekly.get_assignment("flight_deck", date(2026, 6, 20))
+
+        self.assertIsNotNone(assignment)
+        self.assertEqual(assignment.status, "completed")
+        self.assertEqual(assignment.participants, (("sharov", 1.0),))
+        self.assertTrue(seeded_weekly.is_cleaning_saturday("flight_deck", date(2026, 6, 27)))
 
     def test_regular_bind_does_not_overwrite_occupied_person(self) -> None:
         self.store.bind_person("orlov", 101, 201)
@@ -144,7 +164,7 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(self.weekly.complete_past_planned(day), 0)
         self.assertEqual(self.weekly.get_assignment("dorm_weekly", day).status, "planned")
 
-        self.assertEqual(self.weekly.complete_past_planned(date(2026, 6, 14)), 1)
+        self.assertEqual(self.weekly.complete_past_planned(date(2026, 6, 14)), 2)
         self.assertEqual(self.weekly.get_assignment("dorm_weekly", day).status, "completed")
         self.assertEqual(self.weekly.history("dorm_weekly")[0].work_date, day)
 
@@ -153,7 +173,7 @@ class ServiceTest(unittest.TestCase):
 
         completed = self.weekly.complete_past_planned(date(2026, 6, 14))
 
-        self.assertEqual(completed, 2)
+        self.assertEqual(completed, 3)
         self.assertEqual(self.weekly.get_assignment("dorm_weekly", day).status, "completed")
         self.assertEqual(self.weekly.get_assignment("toilet", day).status, "completed")
 
@@ -165,7 +185,7 @@ class ServiceTest(unittest.TestCase):
         self.weekly.mark_skipped("dorm_weekly", day)
         completed = self.weekly.complete_scheduled_for_day(day, except_task="dorm_weekly")
 
-        self.assertEqual(completed, ["toilet"])
+        self.assertEqual(completed, ["toilet", "flight_deck"])
         self.assertEqual(self.weekly.get_assignment("dorm_weekly", day).status, "skipped")
         self.assertEqual(self.weekly.get_assignment("toilet", day).status, "completed")
 
