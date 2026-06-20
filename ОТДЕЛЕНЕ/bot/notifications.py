@@ -31,7 +31,9 @@ async def notify_weekly_for_tomorrow(
 ) -> None:
     today = datetime.now(ZoneInfo(timezone)).date()
     tomorrow = today + timedelta(days=1)
-    for task_id in WEEKLY_TASKS:
+    for task_id, task in WEEKLY_TASKS.items():
+        if not task.get("notify", True):
+            continue
         assignment = weekly.ensure_assignment(task_id, tomorrow)
         if assignment is None or assignment.status == "skipped":
             continue
@@ -61,7 +63,9 @@ async def ask_weekly_done(
     if today.weekday() != 5:
         return
     lines = [f"Сегодня {today.strftime('%d.%m.%Y')} уборки были?"]
-    for task_id in WEEKLY_TASKS:
+    for task_id, task in WEEKLY_TASKS.items():
+        if not task.get("confirm", True):
+            continue
         assignment = weekly.ensure_assignment(task_id, today)
         if assignment is None:
             lines.append(f"{task_title(task_id)}: не по графику")

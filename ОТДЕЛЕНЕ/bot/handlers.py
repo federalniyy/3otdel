@@ -16,6 +16,8 @@ from .keyboards import (
     admin_keyboard,
     binding_people_keyboard,
     bind_keyboard,
+    history_edit_keyboard,
+    history_second_person_keyboard,
     main_keyboard,
     morning_admin_keyboard,
     morning_pair_keyboard,
@@ -37,6 +39,7 @@ class Form(StatesGroup):
     add_weekly = State()
     skip_weekly = State()
     skip_morning = State()
+    edit_history_date = State()
     weekly_absence_reason = State()
 
 
@@ -60,6 +63,32 @@ def create_router(
         if days_since_saturday == 0:
             days_since_saturday = 7
         return current - timedelta(days=days_since_saturday)
+
+    def format_weekly_history(task_id: str) -> str:
+        items = weekly.history(task_id, limit=None)
+        if not items:
+            return "История пока пустая."
+        lines = []
+        for item in items:
+            if item.status == "skipped":
+                lines.append(f"{item.work_date.strftime('%d.%m.%Y')}: уборки не было")
+            else:
+                people = ", ".join(
+                    f"{person_name(person_id)} ({weight:g})"
+                    for person_id, weight in item.participants
+                )
+                lines.append(f"{item.work_date.strftime('%d.%m.%Y')}: {people}")
+        return "История уборок:\n" + "\n".join(lines)
+
+    def format_weekly_counts(task_id: str) -> str:
+        counts = weekly.counts(task_id, statuses=("completed",))
+        last_dates = weekly.last_dates(task_id, statuses=("completed",))
+        lines = [f"Счетчик: {WEEKLY_TASKS[task_id]['short']}"]
+        for person_id in WEEKLY_TASKS[task_id]["roster"]:
+            last = last_dates[person_id]
+            last_text = last.strftime("%d.%m.%Y") if last else "не было"
+            lines.append(f"{person_name(person_id)}: {counts[person_id]:g}, крайняя: {last_text}")
+        return "\n".join(lines)
 
     def remember_user(message_or_callback: Message | CallbackQuery) -> None:
         user = message_or_callback.from_user
@@ -244,19 +273,24 @@ def create_router(
         await callback.answer()
 
     @router.callback_query(F.data.startswith("admin:history_last:"))
-    async def admin_history_last(callback: CallbackQuery) -> None:
+    async def admin_history_last(callback: CallbackQuery, state: FSMContext) -> None:
         if not await require_admin(callback):
             return
         task_id = callback.data.rsplit(":", 1)[1]
-        day = previous_saturday()
+        await state.set_state(Form.edit_history_date)
+        await state.update_data(task_id=task_id)
         await callback.message.answer(
-            f"Кто выполнял {WEEKLY_TASKS[task_id]['short']} {day.strftime('%d.%m.%Y')}?",
-            reply_markup=people_keyboard(
-                f"admin:history_person:{task_id}:{day.isoformat()}",
-                WEEKLY_TASKS[task_id]["roster"],
-                back_callback=f"admin:menu:{task_id}",
-            ),
+            format_weekly_history(task_id)
+            + "\n\nВведи дату, которую нужно отредактировать, например 20.06.2026."
         )
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("admin:counts:"))
+    async def admin_counts(callback: CallbackQuery) -> None:
+        if not await require_admin(callback):
+            return
+        task_id = callback.data.rsplit(":", 1)[1]
+        await callback.message.answer(format_weekly_counts(task_id), reply_markup=weekly_admin_keyboard(task_id))
         await callback.answer()
 
     @router.callback_query(F.data.startswith("admin:history_show:"))
@@ -264,23 +298,42 @@ def create_router(
         if not await require_admin(callback):
             return
         task_id = callback.data.rsplit(":", 1)[1]
-        items = weekly.history(task_id)
-        if not items:
-            text = "История пока пустая."
-        else:
-            lines = []
-            for item in items:
-                if item.status == "skipped":
-                    lines.append(f"{item.work_date.strftime('%d.%m.%Y')}: уборки не было")
-                else:
-                    people = ", ".join(
-                        f"{person_name(person_id)} ({weight:g})"
-                        for person_id, weight in item.participants
-                    )
-                    lines.append(f"{item.work_date.strftime('%d.%m.%Y')}: {people}")
-            text = "История уборок:\n" + "\n".join(lines)
-        await callback.message.answer(text, reply_markup=weekly_admin_keyboard(task_id))
+        await callback.message.answer(format_weekly_history(task_id), reply_markup=weekly_admin_keyboard(task_id))
         await callback.answer()
+
+    @router.callback_query(F.data.startswith("admin:history_edit:"))
+    async def admin_history_edit(callback: CallbackQuery, state: FSMContext) -> None:
+        if not await require_admin(callback):
+            return
+        task_id = callback.data.rsplit(":", 1)[1]
+        await state.set_state(Form.edit_history_date)
+        await state.update_data(task_id=task_id)
+        await callback.message.answer(
+            format_weekly_history(task_id)
+            + "\n\nВведи дату, которую нужно отредактировать, например 20.06.2026."
+        )
+        await callback.answer()
+
+    @router.message(Form.edit_history_date)
+    async def edit_history_date_value(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message):
+            return
+        data = await state.get_data()
+        try:
+            day = parse_date(message.text)
+        except ValueError as error:
+            await message.answer(str(error))
+            return
+        await state.clear()
+        task_id = data["task_id"]
+        await message.answer(
+            f"Кто выполнял {WEEKLY_TASKS[task_id]['short']} {day.strftime('%d.%m.%Y')}?",
+            reply_markup=history_edit_keyboard(
+                task_id,
+                day.strftime("%Y%m%d"),
+                WEEKLY_TASKS[task_id]["roster"],
+            ),
+        )
 
     @router.callback_query(F.data.startswith("admin:history_person:"))
     async def admin_history_person(callback: CallbackQuery) -> None:
@@ -295,6 +348,71 @@ def create_router(
             return
         await callback.message.answer(
             f"Записал в историю: {WEEKLY_TASKS[task_id]['short']} {day.strftime('%d.%m.%Y')} - {person_name(person_id)}.",
+            reply_markup=weekly_admin_keyboard(task_id),
+        )
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("hist_one:"))
+    async def history_one_person(callback: CallbackQuery) -> None:
+        if not await require_admin(callback):
+            return
+        _, task_id, work_date, person_id = callback.data.split(":")
+        day = datetime.strptime(work_date, "%Y%m%d").date()
+        try:
+            weekly.record_completed(task_id, day, [person_id])
+        except ValueError as error:
+            await callback.answer(str(error), show_alert=True)
+            return
+        await callback.message.answer(
+            f"История обновлена: {WEEKLY_TASKS[task_id]['short']} {day.strftime('%d.%m.%Y')} - {person_name(person_id)}.",
+            reply_markup=weekly_admin_keyboard(task_id),
+        )
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("hist_multi:"))
+    async def history_multi(callback: CallbackQuery) -> None:
+        if not await require_admin(callback):
+            return
+        _, task_id, work_date = callback.data.split(":")
+        await callback.message.answer(
+            "Выбери первого:",
+            reply_markup=people_keyboard(
+                f"hist_first:{task_id}:{work_date}",
+                WEEKLY_TASKS[task_id]["roster"],
+                back_callback=f"admin:menu:{task_id}",
+            ),
+        )
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("hist_first:"))
+    async def history_first_person(callback: CallbackQuery) -> None:
+        if not await require_admin(callback):
+            return
+        _, task_id, work_date, first_id = callback.data.split(":")
+        await callback.message.answer(
+            "Выбери второго:",
+            reply_markup=history_second_person_keyboard(
+                task_id,
+                work_date,
+                first_id,
+                WEEKLY_TASKS[task_id]["roster"],
+            ),
+        )
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("hist_second:"))
+    async def history_second_person(callback: CallbackQuery) -> None:
+        if not await require_admin(callback):
+            return
+        _, task_id, work_date, first_id, second_id = callback.data.split(":")
+        day = datetime.strptime(work_date, "%Y%m%d").date()
+        try:
+            weekly.record_completed(task_id, day, [first_id, second_id])
+        except ValueError as error:
+            await callback.answer(str(error), show_alert=True)
+            return
+        await callback.message.answer(
+            f"История обновлена: {WEEKLY_TASKS[task_id]['short']} {day.strftime('%d.%m.%Y')} - {person_name(first_id)} и {person_name(second_id)}.",
             reply_markup=weekly_admin_keyboard(task_id),
         )
         await callback.answer()

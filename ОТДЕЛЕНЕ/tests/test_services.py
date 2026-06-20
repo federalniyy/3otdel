@@ -176,7 +176,7 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(self.weekly.complete_past_planned(day), 0)
         self.assertEqual(self.weekly.get_assignment("dorm_weekly", day).status, "planned")
 
-        self.assertEqual(self.weekly.complete_past_planned(date(2026, 6, 14)), 2)
+        self.assertEqual(self.weekly.complete_past_planned(date(2026, 6, 14)), 1)
         self.assertEqual(self.weekly.get_assignment("dorm_weekly", day).status, "completed")
         self.assertEqual(self.weekly.history("dorm_weekly")[0].work_date, day)
 
@@ -185,7 +185,7 @@ class ServiceTest(unittest.TestCase):
 
         completed = self.weekly.complete_past_planned(date(2026, 6, 14))
 
-        self.assertEqual(completed, 3)
+        self.assertEqual(completed, 2)
         self.assertEqual(self.weekly.get_assignment("dorm_weekly", day).status, "completed")
         self.assertEqual(self.weekly.get_assignment("toilet", day).status, "completed")
 
@@ -197,9 +197,35 @@ class ServiceTest(unittest.TestCase):
         self.weekly.mark_skipped("dorm_weekly", day)
         completed = self.weekly.complete_scheduled_for_day(day, except_task="dorm_weekly")
 
-        self.assertEqual(completed, ["toilet", "flight_deck"])
+        self.assertEqual(completed, ["toilet"])
         self.assertEqual(self.weekly.get_assignment("dorm_weekly", day).status, "skipped")
         self.assertEqual(self.weekly.get_assignment("toilet", day).status, "completed")
+
+    def test_preview_excludes_flight_deck(self) -> None:
+        lines = self.weekly.preview(date(2026, 6, 20), 1)
+
+        self.assertTrue(lines)
+        self.assertNotIn("взлетка", lines[0])
+
+    def test_completed_counter_ignores_planned_assignments(self) -> None:
+        self.store.data["weekly_assignments"] = []
+        self.weekly.record_completed("toilet", date(2026, 6, 13), ["klyus"])
+        self.weekly.ensure_assignment("toilet", date(2026, 6, 20))
+
+        counts = self.weekly.counts("toilet", statuses=("completed",))
+        last_dates = self.weekly.last_dates("toilet", statuses=("completed",))
+
+        self.assertEqual(counts["klyus"], 1.0)
+        self.assertEqual(last_dates["klyus"], date(2026, 6, 13))
+
+    def test_toilet_history_two_people_counts_one_each(self) -> None:
+        self.store.data["weekly_assignments"] = []
+
+        self.weekly.record_completed("toilet", date(2026, 6, 20), ["orlov", "klyus"])
+        counts = self.weekly.counts("toilet", statuses=("completed",))
+
+        self.assertEqual(counts["orlov"], 1.0)
+        self.assertEqual(counts["klyus"], 1.0)
 
     def test_record_completed_history_affects_next_pick(self) -> None:
         self.weekly.record_completed("dorm_weekly", date(2026, 6, 7), ["sharov"])

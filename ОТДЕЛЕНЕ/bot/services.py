@@ -223,15 +223,17 @@ class WeeklyService:
         except_task: str | None = None,
     ) -> list[str]:
         completed = []
-        for task_id in WEEKLY_TASKS:
-            if task_id == except_task:
+        for task_id, task in WEEKLY_TASKS.items():
+            if task_id == except_task or not task.get("confirm", True):
                 continue
             if self.complete_planned(task_id, day):
                 completed.append(task_id)
         return completed
 
     def complete_past_planned(self, today: date) -> int:
-        for task_id in WEEKLY_TASKS:
+        for task_id, task in WEEKLY_TASKS.items():
+            if not task.get("auto_complete", True):
+                continue
             cursor = self.anchor(task_id)
             while cursor < today:
                 if self.is_cleaning_saturday(task_id, cursor):
@@ -293,7 +295,9 @@ class WeeklyService:
             if day.weekday() != 5:
                 continue
             parts = [day.strftime("%d.%m.%Y")]
-            for task_id in WEEKLY_TASKS:
+            for task_id, task in WEEKLY_TASKS.items():
+                if not task.get("show_in_queue", True):
+                    continue
                 if not self.is_cleaning_saturday(task_id, day):
                     parts.append(f"{WEEKLY_TASKS[task_id]['short']}: нет уборки")
                     continue
@@ -310,21 +314,29 @@ class WeeklyService:
             lines.append(" | ".join(parts))
         return lines
 
-    def counts(self, task_id: str) -> dict[str, float]:
+    def counts(
+        self,
+        task_id: str,
+        statuses: tuple[str, ...] = ("planned", "completed"),
+    ) -> dict[str, float]:
         roster = WEEKLY_TASKS[task_id]["roster"]
         counts = {person_id: 0.0 for person_id in roster}
         for assignment in self.store.data["weekly_assignments"]:
-            if assignment["task_id"] != task_id or assignment["status"] not in ("planned", "completed"):
+            if assignment["task_id"] != task_id or assignment["status"] not in statuses:
                 continue
             for participant in assignment["participants"]:
                 counts[participant["person_id"]] += float(participant["weight"])
         return counts
 
-    def last_dates(self, task_id: str) -> dict[str, date | None]:
+    def last_dates(
+        self,
+        task_id: str,
+        statuses: tuple[str, ...] = ("planned", "completed"),
+    ) -> dict[str, date | None]:
         roster = WEEKLY_TASKS[task_id]["roster"]
         last = {person_id: None for person_id in roster}
         for assignment in self.store.data["weekly_assignments"]:
-            if assignment["task_id"] != task_id or assignment["status"] not in ("planned", "completed"):
+            if assignment["task_id"] != task_id or assignment["status"] not in statuses:
                 continue
             work_date = date.fromisoformat(assignment["work_date"])
             for participant in assignment["participants"]:
@@ -333,7 +345,7 @@ class WeeklyService:
                     last[person_id] = work_date
         return last
 
-    def history(self, task_id: str, limit: int = 10) -> list[WeeklyAssignment]:
+    def history(self, task_id: str, limit: int | None = 10) -> list[WeeklyAssignment]:
         self._check_task(task_id)
         assignments = [
             assignment
@@ -342,7 +354,9 @@ class WeeklyService:
         ]
         assignments.sort(key=lambda assignment: assignment["work_date"], reverse=True)
         result = []
-        for assignment in assignments[:limit]:
+        if limit is not None:
+            assignments = assignments[:limit]
+        for assignment in assignments:
             result.append(
                 WeeklyAssignment(
                     task_id=task_id,

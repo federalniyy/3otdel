@@ -29,6 +29,7 @@ def admin_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Очередь туалета", callback_data="admin:menu:toilet")],
             [InlineKeyboardButton(text="Очередь спальника, суббота", callback_data="admin:menu:dorm_weekly")],
             [InlineKeyboardButton(text="Очередь спальника, утро", callback_data="admin:menu:morning")],
+            [InlineKeyboardButton(text="Очередь взлетки", callback_data="admin:menu:flight_deck")],
             [InlineKeyboardButton(text="Привязки аккаунтов", callback_data="admin:bindings")],
             [InlineKeyboardButton(text="Очередь на 3 недели", callback_data="queue3")],
         ]
@@ -36,38 +37,46 @@ def admin_keyboard() -> InlineKeyboardMarkup:
 
 
 def weekly_admin_keyboard(task_id: str) -> InlineKeyboardMarkup:
-    short = WEEKLY_TASKS[task_id]["short"]
-    rows = []
-    if task_id == "toilet":
-        rows.append(
-            [
-                InlineKeyboardButton(text=f"Старт круга: {short}", callback_data=f"admin:set_anchor:{task_id}"),
-            ]
-        )
-    rows.extend(
+    rows = [
         [
-            [
-                InlineKeyboardButton(text="Заменить назначенного", callback_data=f"admin:replace:{task_id}"),
-            ],
-            [
-                InlineKeyboardButton(text="+ человек на усиленную уборку", callback_data=f"admin:add:{task_id}"),
-            ],
-            [
-                InlineKeyboardButton(text="Уборки не было", callback_data=f"admin:skip_weekly:{task_id}"),
-            ],
-            [
-                InlineKeyboardButton(text="Внести последнюю субботу", callback_data=f"admin:history_last:{task_id}"),
-            ],
-            [
-                InlineKeyboardButton(text="История уборок", callback_data=f"admin:history_show:{task_id}"),
-            ],
-            [InlineKeyboardButton(text="Назад", callback_data="admin")],
-        ]
-    )
-    return InlineKeyboardMarkup(
-        inline_keyboard=rows
-    )
-
+            InlineKeyboardButton(
+                text="Заменить назначенного",
+                callback_data=f"admin:replace:{task_id}",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="+ человек на усиленную уборку",
+                callback_data=f"admin:add:{task_id}",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="Уборки не было",
+                callback_data=f"admin:skip_weekly:{task_id}",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="Показать счетчик",
+                callback_data=f"admin:counts:{task_id}",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="Отредактировать историю",
+                callback_data=f"admin:history_edit:{task_id}",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="История уборок",
+                callback_data=f"admin:history_show:{task_id}",
+            ),
+        ],
+        [InlineKeyboardButton(text="Назад", callback_data="admin")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def morning_admin_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
@@ -130,6 +139,31 @@ def binding_people_keyboard(telegram_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+
+def history_edit_keyboard(task_id: str, work_date: str, person_ids: tuple[str, ...] | list[str]) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text=PEOPLE_BY_ID[person_id].name, callback_data=f"hist_one:{task_id}:{work_date}:{person_id}")]
+        for person_id in person_ids
+    ]
+    rows.append([InlineKeyboardButton(text="Несколько", callback_data=f"hist_multi:{task_id}:{work_date}")])
+    rows.append([InlineKeyboardButton(text="Назад", callback_data=f"admin:menu:{task_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def history_second_person_keyboard(
+    task_id: str,
+    work_date: str,
+    first_id: str,
+    person_ids: tuple[str, ...] | list[str],
+) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text=PEOPLE_BY_ID[person_id].name, callback_data=f"hist_second:{task_id}:{work_date}:{first_id}:{person_id}")]
+        for person_id in person_ids
+        if person_id != first_id
+    ]
+    rows.append([InlineKeyboardButton(text="Назад", callback_data=f"admin:menu:{task_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
 def morning_pair_keyboard(work_date: str) -> InlineKeyboardMarkup:
     rows = []
     for index, first_id in enumerate(MORNING_ROSTER):
@@ -181,6 +215,8 @@ def weekly_cant_keyboard(task_id: str, work_date: str, person_id: str) -> Inline
 def weekly_done_keyboard(work_date: str) -> InlineKeyboardMarkup:
     rows = []
     for task_id, task in WEEKLY_TASKS.items():
+        if not task.get("confirm", True):
+            continue
         rows.append(
             [
                 InlineKeyboardButton(

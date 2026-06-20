@@ -71,6 +71,10 @@ WEEKLY_TASKS = {
         "roster": DORM_WEEKLY_ROSTER,
         "schedule": "weekly",
         "weight_mode": "split",
+        "show_in_queue": True,
+        "notify": True,
+        "confirm": True,
+        "auto_complete": True,
     },
     "toilet": {
         "title": "уборка туалета",
@@ -78,6 +82,10 @@ WEEKLY_TASKS = {
         "roster": TOILET_ROSTER,
         "schedule": "two_on_one_off",
         "weight_mode": "per_person",
+        "show_in_queue": True,
+        "notify": True,
+        "confirm": True,
+        "auto_complete": True,
     },
     "flight_deck": {
         "title": "субботняя взлетка",
@@ -85,6 +93,10 @@ WEEKLY_TASKS = {
         "roster": FLIGHT_DECK_ROSTER,
         "schedule": "weekly",
         "weight_mode": "split",
+        "show_in_queue": False,
+        "notify": False,
+        "confirm": False,
+        "auto_complete": False,
     },
 }
 
