@@ -23,8 +23,9 @@ DORM_WEEKLY_LEONTYEV_HISTORY_SEED_KEY = "seed.dorm_weekly_leontyev_2026_06_06"
 DORM_WEEKLY_LEONTYEV_HISTORY_SEED = (
     ("2026-06-06", (("leontyev", 1.0, "primary"),)),
 )
-TOILET_HISTORY_BALANCE_SEED_KEY = "seed.toilet_history_from_excel_2026_06_20_v1"
+TOILET_HISTORY_BALANCE_SEED_KEY = "seed.toilet_history_from_excel_2026_06_20_v2"
 TOILET_HISTORY_BALANCE_SEED = (
+    ("2026-03-21", (("klyus", 1.0, "primary"), ("orlov", 1.0, "extra"))),
     ("2026-03-28", (("klyus", 1.0, "primary"), ("kazakov", 1.0, "extra"))),
     ("2026-04-04", (("klyus", 1.0, "primary"), ("orlov", 1.0, "extra"))),
     ("2026-04-11", (("pilugin", 1.0, "primary"),)),

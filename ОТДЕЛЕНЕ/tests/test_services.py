@@ -83,12 +83,24 @@ class ServiceTest(unittest.TestCase):
         counts = seeded_weekly.counts("toilet")
         last_dates = seeded_weekly.last_dates("toilet")
 
-        self.assertEqual(counts["klyus"], 3.0)
+        self.assertEqual(counts["klyus"], 4.0)
         self.assertEqual(counts["leontyev"], 2.0)
-        self.assertEqual(counts["orlov"], 3.0)
+        self.assertEqual(counts["orlov"], 4.0)
         self.assertEqual(counts["pilugin"], 4.0)
         self.assertEqual(counts["sovenko"], 2.0)
         self.assertEqual(counts["kazakov"], 3.0)
+        before_20 = {person_id: 0.0 for person_id in counts}
+        for assignment in seeded_store.data["weekly_assignments"]:
+            if assignment["task_id"] != "toilet" or assignment["work_date"] >= "2026-06-20":
+                continue
+            for participant in assignment["participants"]:
+                before_20[participant["person_id"]] += participant["weight"]
+        self.assertEqual(before_20["klyus"], 3.0)
+        self.assertEqual(before_20["leontyev"], 2.0)
+        self.assertEqual(before_20["orlov"], 3.0)
+        self.assertEqual(before_20["pilugin"], 4.0)
+        self.assertEqual(before_20["sovenko"], 2.0)
+        self.assertEqual(before_20["kazakov"], 3.0)
         self.assertEqual(last_dates["orlov"], date(2026, 6, 20))
         self.assertEqual(last_dates["klyus"], date(2026, 6, 20))
 
