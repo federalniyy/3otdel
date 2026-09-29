@@ -5,15 +5,8 @@ from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 
-from .keyboards import (
-    lender_cant_keyboard,
-    morning_manual_keyboard,
-    task_title,
-    weekly_cant_keyboard,
-    weekly_done_keyboard,
-)
-from .constants import WEEKLY_TASKS
-from .services import MorningService, WeeklyService
+from .keyboards import lender_cant_keyboard, morning_cant_keyboard, morning_manual_keyboard, task_title, weekly_cant_keyboard
+from .services import MorningService, WeeklyService, DepartmentService
 from .storage import JsonStore
 from .utils import person_name
 
@@ -23,28 +16,16 @@ async def notify_admins(store: JsonStore, bot: Bot, text: str, reply_markup=None
         await bot.send_message(admin["chat_id"], text, reply_markup=reply_markup)
 
 
-async def notify_weekly_for_tomorrow(
-    store: JsonStore,
-    weekly: WeeklyService,
-    bot: Bot,
-    timezone: str,
-) -> None:
+async def notify_weekly_for_tomorrow(store: JsonStore, weekly: WeeklyService, bot: Bot, timezone: str) -> None:
     today = datetime.now(ZoneInfo(timezone)).date()
     tomorrow = today + timedelta(days=1)
-    for task_id, task in WEEKLY_TASKS.items():
-        if not task.get("notify", True):
-            continue
+    for task_id in ("dorm_weekly", "toilet"):
         assignment = weekly.ensure_assignment(task_id, tomorrow)
-        if assignment is None or assignment.status == "skipped":
-            continue
+        if assignment is None or assignment.status == "skipped": continue
         for person_id, weight in assignment.participants:
             people = store.people_with_chat([person_id])
             if not people:
-                await notify_admins(
-                    store,
-                    bot,
-                    f"Не могу уведомить {person_name(person_id)}: он не нажал /start.",
-                )
+                await notify_admins(store, bot, f"Не могу уведомить {person_name(person_id)}: он не нажал /start.")
                 continue
             await bot.send_message(
                 people[0]["chat_id"],
@@ -53,86 +34,48 @@ async def notify_weekly_for_tomorrow(
             )
 
 
-async def ask_weekly_done(
-    store: JsonStore,
-    weekly: WeeklyService,
-    bot: Bot,
-    timezone: str,
-) -> None:
-    today = datetime.now(ZoneInfo(timezone)).date()
-    if today.weekday() != 5:
-        return
-    lines = [f"Сегодня {today.strftime('%d.%m.%Y')} уборки были?"]
-    for task_id, task in WEEKLY_TASKS.items():
-        if not task.get("confirm", True):
-            continue
-        assignment = weekly.ensure_assignment(task_id, today)
-        if assignment is None:
-            lines.append(f"{task_title(task_id)}: не по графику")
-            continue
-        if assignment.status == "skipped":
-            lines.append(f"{task_title(task_id)}: уже отмечено, что не было")
-            continue
-        names = ", ".join(
-            f"{person_name(person_id)} ({weight:g})"
-            for person_id, weight in assignment.participants
-        )
-        lines.append(f"{task_title(task_id)}: {names}")
-    await notify_admins(
-        store,
-        bot,
-        "\n".join(lines),
-        reply_markup=weekly_done_keyboard(today.isoformat()),
-    )
-
-
-async def notify_morning_for_tomorrow(
-    store: JsonStore,
-    morning: MorningService,
-    bot: Bot,
-    timezone: str,
-) -> None:
+async def notify_morning_for_tomorrow(store: JsonStore, morning: MorningService, bot: Bot, timezone: str) -> None:
     tomorrow = datetime.now(ZoneInfo(timezone)).date() + timedelta(days=1)
     slots = morning.ensure_day(tomorrow)
-    if not slots:
-        return
+    if not slots: return
     for slot in slots:
         people = store.people_with_chat([slot.person_id])
         text = f"Завтра утром {tomorrow.strftime('%d.%m.%Y')} уборка спального помещения."
         if slot.person_id != slot.original_person_id:
             text += f" Ты идешь за {person_name(slot.original_person_id)}."
         if not people:
-            await notify_admins(
-                store,
-                bot,
-                f"Не могу уведомить {person_name(slot.person_id)}: он не нажал /start.",
-            )
+            await notify_admins(store, bot, f"Не могу уведомить {person_name(slot.person_id)}: он не нажал /start.")
             continue
-        await bot.send_message(
-            people[0]["chat_id"],
-            text,
-        )
+        await bot.send_message(people[0]["chat_id"], text, reply_markup=morning_cant_keyboard(tomorrow.isoformat(), slot.person_id))
 
 
-async def notify_lender(
-    store: JsonStore,
-    bot: Bot,
-    work_date: date,
-    borrower_id: str,
-    lender_id: str,
-    debt_id: int,
-) -> None:
+async def notify_lender(store: JsonStore, bot: Bot, work_date: date, borrower_id: str, lender_id: str, debt_id: int) -> None:
     people = store.people_with_chat([lender_id])
-    text = (
-        f"{person_name(borrower_id)} не может выйти утром {work_date.strftime('%d.%m.%Y')} "
-        f"и берет у тебя взаймы. Если ты тоже не можешь, нажми кнопку."
-    )
+    text = f"{person_name(borrower_id)} не может выйти утром {work_date.strftime('%d.%m.%Y')} и берет у тебя взаймы. Если ты тоже не можешь, нажми кнопку."
     if not people:
-        await notify_admins(
-            store,
-            bot,
-            f"{person_name(lender_id)} должен заменить {person_name(borrower_id)}, но он не нажал /start.",
-            reply_markup=morning_manual_keyboard(debt_id),
-        )
+        await notify_admins(store, bot, f"{person_name(lender_id)} должен заменить {person_name(borrower_id)}, но он не нажал /start.", reply_markup=morning_manual_keyboard(debt_id))
         return
     await bot.send_message(people[0]["chat_id"], text, reply_markup=lender_cant_keyboard(debt_id))
+
+
+async def notify_department(store: JsonStore, dept: DepartmentService, bot: Bot, timezone: str, is_tomorrow: bool) -> None:
+    target_date = datetime.now(ZoneInfo(timezone)).date()
+    if is_tomorrow:
+        target_date += timedelta(days=1)
+        
+    persons = dept.ensure_day(target_date)
+    if not persons:
+        return
+
+    weight = 3.0 / len(persons)
+    names = ", ".join(person_name(p) for p in persons)
+    day_prefix = "Завтра" if is_tomorrow else "Сегодня"
+    
+    text = f"🧹 {day_prefix} уборка кафедры!\nСостав: {names}\nВес каждому: +{weight:g}"
+    
+    for p in persons:
+        people = store.people_with_chat([p])
+        if people:
+            await bot.send_message(people[0]["chat_id"], text)
+
+    await notify_admins(store, bot, f"[Кафедра {day_prefix}]\nСостав: {names}")

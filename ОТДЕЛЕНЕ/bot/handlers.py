@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import date, timedelta
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
@@ -9,28 +8,19 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
-from .constants import MORNING_ROSTER, WEEKLY_TASKS
+from .constants import WEEKLY_TASKS
 from .keyboards import (
     absence_admin_keyboard,
-    account_bindings_keyboard,
     admin_keyboard,
-    binding_people_keyboard,
     bind_keyboard,
-    history_edit_keyboard,
-    history_second_person_keyboard,
     main_keyboard,
-    morning_admin_keyboard,
-    morning_pair_keyboard,
     morning_manual_keyboard,
-    morning_tomorrow_keyboard,
-    people_keyboard,
     task_title,
-    weekly_admin_keyboard,
 )
 from .notifications import notify_admins, notify_lender
-from .services import MorningService, WeeklyService
+from .services import MorningService, WeeklyService, DepartmentService
 from .storage import JsonStore
-from .utils import parse_date, person_name
+from .utils import format_people, parse_date, parse_person, person_name
 
 
 class Form(StatesGroup):
@@ -39,75 +29,16 @@ class Form(StatesGroup):
     add_weekly = State()
     skip_weekly = State()
     skip_morning = State()
-    edit_history_date = State()
+    restart_morning = State()
     weekly_absence_reason = State()
+    weekly_absence_replacement = State()
+    morning_debt_replacement = State()
+    dept_extra_week = State()
+    dept_edit_day = State()
 
 
-def create_router(
-    store: JsonStore,
-    weekly: WeeklyService,
-    morning: MorningService,
-    timezone: str = "Europe/Moscow",
-) -> Router:
+def create_router(store: JsonStore, weekly: WeeklyService, morning: MorningService, dept: DepartmentService) -> Router:
     router = Router()
-
-    def today() -> date:
-        return datetime.now(ZoneInfo(timezone)).date()
-
-    def tomorrow() -> date:
-        return today() + timedelta(days=1)
-
-    def previous_saturday() -> date:
-        current = today()
-        days_since_saturday = (current.weekday() - 5) % 7
-        if days_since_saturday == 0:
-            days_since_saturday = 7
-        return current - timedelta(days=days_since_saturday)
-
-    def format_weekly_history(task_id: str) -> str:
-        items = weekly.history(task_id, limit=None)
-        if not items:
-            return "История пока пустая."
-        lines = []
-        for item in items:
-            if item.status == "skipped":
-                lines.append(f"{item.work_date.strftime('%d.%m.%Y')}: уборки не было")
-            else:
-                people = ", ".join(
-                    f"{person_name(person_id)} ({weight:g})"
-                    for person_id, weight in item.participants
-                )
-                lines.append(f"{item.work_date.strftime('%d.%m.%Y')}: {people}")
-        return "История уборок:\n" + "\n".join(lines)
-
-    def format_weekly_counts(task_id: str) -> str:
-        counts = weekly.counts(task_id, statuses=("completed",))
-        last_dates = weekly.last_dates(task_id, statuses=("completed",))
-        lines = [f"Счетчик: {WEEKLY_TASKS[task_id]['short']}"]
-        for person_id in WEEKLY_TASKS[task_id]["roster"]:
-            last = last_dates[person_id]
-            last_text = last.strftime("%d.%m.%Y") if last else "не было"
-            lines.append(f"{person_name(person_id)}: {counts[person_id]:g}, крайняя: {last_text}")
-        return "\n".join(lines)
-
-    def remember_user(message_or_callback: Message | CallbackQuery) -> None:
-        user = message_or_callback.from_user
-        message = (
-            message_or_callback.message
-            if isinstance(message_or_callback, CallbackQuery)
-            else message_or_callback
-        )
-        store.remember_account(
-            user.id,
-            message.chat.id,
-            username=user.username,
-            first_name=user.first_name,
-            last_name=user.last_name,
-            full_name=user.full_name,
-        )
-        person = store.person_by_telegram(user.id)
-        if person and person.get("chat_id") != message.chat.id:
-            store.bind_person(person["id"], user.id, message.chat.id, force=True)
 
     def bound_person(user_id: int) -> dict | None:
         return store.person_by_telegram(user_id)
@@ -129,7 +60,6 @@ def create_router(
 
     @router.message(CommandStart())
     async def start(message: Message) -> None:
-        remember_user(message)
         person = bound_person(message.from_user.id)
         if person:
             await message.answer(
@@ -141,17 +71,8 @@ def create_router(
 
     @router.callback_query(F.data.startswith("bind:"))
     async def bind(callback: CallbackQuery) -> None:
-        remember_user(callback)
         person_id = callback.data.split(":", 1)[1]
-        current_person = bound_person(callback.from_user.id)
-        if current_person and current_person["id"] != person_id:
-            await callback.answer("Ты уже привязан. Перепривязку делает администратор.", show_alert=True)
-            return
-        try:
-            store.bind_person(person_id, callback.from_user.id, callback.message.chat.id)
-        except ValueError as error:
-            await callback.answer(str(error), show_alert=True)
-            return
+        store.bind_person(person_id, callback.from_user.id, callback.message.chat.id)
         person = store.data["people"][person_id]
         await callback.message.edit_text(
             f"Готово, ты привязан как {person['display_name']}.",
@@ -161,106 +82,97 @@ def create_router(
 
     @router.message(Command("menu"))
     async def menu(message: Message) -> None:
-        remember_user(message)
         person = bound_person(message.from_user.id)
         await message.answer("Меню", reply_markup=main_keyboard(bool(person and person.get("is_admin"))))
 
     @router.message(Command("queue"))
     async def queue_command(message: Message) -> None:
-        remember_user(message)
         await send_queue(message)
 
     @router.callback_query(F.data == "queue3")
     async def queue_callback(callback: CallbackQuery) -> None:
-        remember_user(callback)
         await send_queue(callback.message)
         await callback.answer()
 
     async def send_queue(message: Message) -> None:
-        lines = weekly.preview(today(), 21)
-        text = "Очередь на ближайшие 3 недели:\n" + ("\n".join(lines) if lines else "В ближайшие 3 недели суббот нет.")
+        today = date.today()
+        weekly_lines = weekly.preview(today, 21)
+        dept_lines = dept.preview(today, 21)
+        
+        text = "Очередь на ближайшие 3 недели (Субботы):\n" + ("\n".join(weekly_lines) if weekly_lines else "В ближайшие 3 недели суббот нет.")
+        text += "\n\nДни уборки кафедры:\n" + ("\n".join(dept_lines) if dept_lines else "В ближайшие 3 недели нет уборок кафедры.")
         await message.answer(text)
 
     @router.callback_query(F.data == "morning7")
     async def morning_callback(callback: CallbackQuery) -> None:
-        remember_user(callback)
-        lines = morning.preview(today(), 7)
+        lines = morning.preview(date.today(), 7)
         await callback.message.answer("Утренние уборки на 7 дней:\n" + "\n".join(lines))
         await callback.answer()
 
     @router.message(Command("admin"))
     async def admin_command(message: Message) -> None:
-        remember_user(message)
         if not await require_admin(message):
             return
         await message.answer("Админ-панель", reply_markup=admin_keyboard())
 
     @router.callback_query(F.data == "admin")
     async def admin_callback(callback: CallbackQuery) -> None:
-        remember_user(callback)
         if not await require_admin(callback):
             return
         await callback.message.answer("Админ-панель", reply_markup=admin_keyboard())
         await callback.answer()
 
-    @router.callback_query(F.data == "admin:bindings")
-    async def admin_bindings(callback: CallbackQuery) -> None:
-        remember_user(callback)
-        if not await require_admin(callback):
-            return
-        accounts = store.known_accounts()
-        text = "Выбери Telegram-аккаунт, который нужно закрепить за фамилией."
-        if not accounts:
-            text = "Пока нет аккаунтов. Человек должен хотя бы раз открыть бота."
-        await callback.message.answer(text, reply_markup=account_bindings_keyboard(accounts))
+    @router.callback_query(F.data == "admin:dept_extra")
+    async def dept_extra_week(callback: CallbackQuery, state: FSMContext) -> None:
+        if not await require_admin(callback): return
+        await state.set_state(Form.dept_extra_week)
+        await callback.message.answer("Введи любую дату из нужной недели для назначения внеочередной уборки кафедры (например 05.10.2026).")
         await callback.answer()
 
-    @router.callback_query(F.data.startswith("admin:binding_account:"))
-    async def admin_binding_account(callback: CallbackQuery) -> None:
-        remember_user(callback)
-        if not await require_admin(callback):
-            return
-        telegram_id = int(callback.data.rsplit(":", 1)[1])
-        await callback.message.answer(
-            "К какой фамилии привязать этот Telegram-аккаунт?",
-            reply_markup=binding_people_keyboard(telegram_id),
-        )
-        await callback.answer()
-
-    @router.callback_query(F.data.startswith("admin:bind_account_to:"))
-    async def admin_bind_account_to(callback: CallbackQuery) -> None:
-        remember_user(callback)
-        if not await require_admin(callback):
-            return
-        _, _, telegram_id, person_id = callback.data.split(":")
+    @router.message(Form.dept_extra_week)
+    async def dept_extra_week_val(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message): return
         try:
-            store.force_bind_person(person_id, int(telegram_id))
+            day = parse_date(message.text)
+            dept.add_extra_week(day)
+            await message.answer("Внеочередная неделя добавлена.", reply_markup=admin_keyboard())
         except ValueError as error:
-            await callback.answer(str(error), show_alert=True)
-            return
-        person = store.data["people"][person_id]
+            await message.answer(str(error))
+        await state.clear()
+
+    @router.callback_query(F.data == "admin:dept_edit")
+    async def dept_edit_day(callback: CallbackQuery, state: FSMContext) -> None:
+        if not await require_admin(callback): return
+        await state.set_state(Form.dept_edit_day)
         await callback.message.answer(
-            f"Готово: аккаунт id {telegram_id} закреплен за {person['display_name']}.",
-            reply_markup=account_bindings_keyboard(store.known_accounts()),
+            "Введи дату и действие.\nДобавить: `12.10.2026 +Орлов`\nУдалить: `12.10.2026 -Орлов`\nЗаменить: `12.10.2026 Орлов -> Леонтьев`",
+            parse_mode="Markdown"
         )
         await callback.answer()
 
-    @router.callback_query(F.data.startswith("admin:menu:"))
-    async def admin_submenu(callback: CallbackQuery) -> None:
-        if not await require_admin(callback):
-            return
-        menu = callback.data.rsplit(":", 1)[1]
-        if menu == "morning":
-            await callback.message.answer("Настройка очереди спальника утром", reply_markup=morning_admin_keyboard())
-        elif menu in WEEKLY_TASKS:
-            await callback.message.answer(
-                f"Настройка очереди: {WEEKLY_TASKS[menu]['title']}",
-                reply_markup=weekly_admin_keyboard(menu),
-            )
-        else:
-            await callback.answer("Неизвестное меню.", show_alert=True)
-            return
-        await callback.answer()
+    @router.message(Form.dept_edit_day)
+    async def dept_edit_day_val(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message): return
+        try:
+            text = message.text.strip()
+            if "->" in text:
+                left, right = text.split("->", 1)
+                parts = left.split()
+                day, p1 = parse_date(parts[0]), parse_person(parts[1])
+                p2 = parse_person(right)
+                dept.edit_day(day, "replace", p1, p2)
+            elif "+" in text or "-" in text:
+                parts = text.split()
+                day = parse_date(parts[0])
+                action = "add" if parts[1].startswith("+") else "remove"
+                p1 = parse_person(parts[1][1:])
+                dept.edit_day(day, action, p1)
+            else:
+                raise ValueError("Неверный формат. Используйте +, - или ->")
+            await message.answer("Изменения в расписание кафедры внесены, веса пересчитаются автоматически.", reply_markup=admin_keyboard())
+        except (ValueError, IndexError) as error:
+            await message.answer(f"Ошибка: {error}")
+        await state.clear()
 
     @router.callback_query(F.data.startswith("admin:set_anchor:"))
     async def admin_set_anchor(callback: CallbackQuery, state: FSMContext) -> None:
@@ -270,181 +182,6 @@ def create_router(
         await state.set_state(Form.set_anchor)
         await state.update_data(task_id=task_id)
         await callback.message.answer(f"Введи дату начала круга для '{WEEKLY_TASKS[task_id]['short']}' в формате 13.06.2026.")
-        await callback.answer()
-
-    @router.callback_query(F.data.startswith("admin:history_last:"))
-    async def admin_history_last(callback: CallbackQuery, state: FSMContext) -> None:
-        if not await require_admin(callback):
-            return
-        task_id = callback.data.rsplit(":", 1)[1]
-        await state.set_state(Form.edit_history_date)
-        await state.update_data(task_id=task_id)
-        await callback.message.answer(
-            format_weekly_history(task_id)
-            + "\n\nВведи дату, которую нужно отредактировать, например 20.06.2026."
-        )
-        await callback.answer()
-
-    @router.callback_query(F.data.startswith("admin:counts:"))
-    async def admin_counts(callback: CallbackQuery) -> None:
-        if not await require_admin(callback):
-            return
-        task_id = callback.data.rsplit(":", 1)[1]
-        await callback.message.answer(format_weekly_counts(task_id), reply_markup=weekly_admin_keyboard(task_id))
-        await callback.answer()
-
-    @router.callback_query(F.data.startswith("admin:history_show:"))
-    async def admin_history_show(callback: CallbackQuery) -> None:
-        if not await require_admin(callback):
-            return
-        task_id = callback.data.rsplit(":", 1)[1]
-        await callback.message.answer(format_weekly_history(task_id), reply_markup=weekly_admin_keyboard(task_id))
-        await callback.answer()
-
-    @router.callback_query(F.data.startswith("admin:history_edit:"))
-    async def admin_history_edit(callback: CallbackQuery, state: FSMContext) -> None:
-        if not await require_admin(callback):
-            return
-        task_id = callback.data.rsplit(":", 1)[1]
-        await state.set_state(Form.edit_history_date)
-        await state.update_data(task_id=task_id)
-        await callback.message.answer(
-            format_weekly_history(task_id)
-            + "\n\nВведи дату, которую нужно отредактировать, например 20.06.2026."
-        )
-        await callback.answer()
-
-    @router.message(Form.edit_history_date)
-    async def edit_history_date_value(message: Message, state: FSMContext) -> None:
-        if not await require_admin(message):
-            return
-        data = await state.get_data()
-        try:
-            day = parse_date(message.text)
-        except ValueError as error:
-            await message.answer(str(error))
-            return
-        await state.clear()
-        task_id = data["task_id"]
-        await message.answer(
-            f"Кто выполнял {WEEKLY_TASKS[task_id]['short']} {day.strftime('%d.%m.%Y')}?",
-            reply_markup=history_edit_keyboard(
-                task_id,
-                day.strftime("%Y%m%d"),
-                WEEKLY_TASKS[task_id]["roster"],
-            ),
-        )
-
-    @router.callback_query(F.data.startswith("admin:history_person:"))
-    async def admin_history_person(callback: CallbackQuery) -> None:
-        if not await require_admin(callback):
-            return
-        _, _, task_id, work_date, person_id = callback.data.split(":")
-        day = date.fromisoformat(work_date)
-        try:
-            weekly.record_completed(task_id, day, [person_id])
-        except ValueError as error:
-            await callback.answer(str(error), show_alert=True)
-            return
-        await callback.message.answer(
-            f"Записал в историю: {WEEKLY_TASKS[task_id]['short']} {day.strftime('%d.%m.%Y')} - {person_name(person_id)}.",
-            reply_markup=weekly_admin_keyboard(task_id),
-        )
-        await callback.answer()
-
-    @router.callback_query(F.data.startswith("hist_one:"))
-    async def history_one_person(callback: CallbackQuery) -> None:
-        if not await require_admin(callback):
-            return
-        _, task_id, work_date, person_id = callback.data.split(":")
-        day = datetime.strptime(work_date, "%Y%m%d").date()
-        try:
-            weekly.record_completed(task_id, day, [person_id])
-        except ValueError as error:
-            await callback.answer(str(error), show_alert=True)
-            return
-        await callback.message.answer(
-            f"История обновлена: {WEEKLY_TASKS[task_id]['short']} {day.strftime('%d.%m.%Y')} - {person_name(person_id)}.",
-            reply_markup=weekly_admin_keyboard(task_id),
-        )
-        await callback.answer()
-
-    @router.callback_query(F.data.startswith("hist_multi:"))
-    async def history_multi(callback: CallbackQuery) -> None:
-        if not await require_admin(callback):
-            return
-        _, task_id, work_date = callback.data.split(":")
-        await callback.message.answer(
-            "Выбери первого:",
-            reply_markup=people_keyboard(
-                f"hist_first:{task_id}:{work_date}",
-                WEEKLY_TASKS[task_id]["roster"],
-                back_callback=f"admin:menu:{task_id}",
-            ),
-        )
-        await callback.answer()
-
-    @router.callback_query(F.data.startswith("hist_first:"))
-    async def history_first_person(callback: CallbackQuery) -> None:
-        if not await require_admin(callback):
-            return
-        _, task_id, work_date, first_id = callback.data.split(":")
-        await callback.message.answer(
-            "Выбери второго:",
-            reply_markup=history_second_person_keyboard(
-                task_id,
-                work_date,
-                first_id,
-                WEEKLY_TASKS[task_id]["roster"],
-            ),
-        )
-        await callback.answer()
-
-    @router.callback_query(F.data.startswith("hist_second:"))
-    async def history_second_person(callback: CallbackQuery) -> None:
-        if not await require_admin(callback):
-            return
-        _, task_id, work_date, first_id, second_id = callback.data.split(":")
-        day = datetime.strptime(work_date, "%Y%m%d").date()
-        try:
-            weekly.record_completed(task_id, day, [first_id, second_id])
-        except ValueError as error:
-            await callback.answer(str(error), show_alert=True)
-            return
-        await callback.message.answer(
-            f"История обновлена: {WEEKLY_TASKS[task_id]['short']} {day.strftime('%d.%m.%Y')} - {person_name(first_id)} и {person_name(second_id)}.",
-            reply_markup=weekly_admin_keyboard(task_id),
-        )
-        await callback.answer()
-
-    @router.callback_query(F.data.startswith("weekly_done:all:"))
-    async def weekly_done_all(callback: CallbackQuery) -> None:
-        if not await require_admin(callback):
-            return
-        work_date = callback.data.rsplit(":", 1)[1]
-        day = date.fromisoformat(work_date)
-        completed = weekly.complete_scheduled_for_day(day)
-        if completed:
-            names = ", ".join(WEEKLY_TASKS[task_id]["short"] for task_id in completed)
-            text = f"Засчитал за {day.strftime('%d.%m.%Y')}: {names}."
-        else:
-            text = f"За {day.strftime('%d.%m.%Y')} нечего засчитывать или уже все отмечено."
-        await callback.message.answer(text, reply_markup=admin_keyboard())
-        await callback.answer()
-
-    @router.callback_query(F.data.startswith("weekly_done:missing:"))
-    async def weekly_done_missing(callback: CallbackQuery) -> None:
-        if not await require_admin(callback):
-            return
-        _, _, task_id, work_date = callback.data.split(":")
-        day = date.fromisoformat(work_date)
-        weekly.mark_skipped(task_id, day)
-        completed = weekly.complete_scheduled_for_day(day, except_task=task_id)
-        text = f"Отметил: {WEEKLY_TASKS[task_id]['short']} {day.strftime('%d.%m.%Y')} не было."
-        if completed:
-            names = ", ".join(WEEKLY_TASKS[item]["short"] for item in completed)
-            text += f" Засчитал: {names}."
-        await callback.message.answer(text, reply_markup=admin_keyboard())
         await callback.answer()
 
     @router.message(Form.set_anchor)
@@ -459,7 +196,7 @@ def create_router(
             await message.answer(str(error))
             return
         await state.clear()
-        await message.answer("Начало круга обновлено.", reply_markup=weekly_admin_keyboard(data["task_id"]))
+        await message.answer("Начало круга обновлено.", reply_markup=admin_keyboard())
 
     @router.callback_query(F.data.startswith("admin:replace:"))
     async def admin_replace(callback: CallbackQuery, state: FSMContext) -> None:
@@ -468,7 +205,11 @@ def create_router(
         task_id = callback.data.rsplit(":", 1)[1]
         await state.set_state(Form.replace_weekly)
         await state.update_data(task_id=task_id)
-        await callback.message.answer("Введи дату уборки. После этого выберешь человека кнопкой.")
+        await callback.message.answer(
+            "Введи дату и замену: `13.06.2026 Леонтьев`.\n"
+            "Если нужно заменить конкретного: `13.06.2026 Орлов -> Леонтьев`.",
+            parse_mode="Markdown",
+        )
         await callback.answer()
 
     @router.message(Form.replace_weekly)
@@ -477,67 +218,13 @@ def create_router(
             return
         data = await state.get_data()
         try:
-            day = parse_date(message.text)
-            assignment = weekly.ensure_assignment(data["task_id"], day)
+            day, old_person, new_person = _parse_weekly_replace(message.text)
+            weekly.replace_person(data["task_id"], day, new_person, old_person)
         except ValueError as error:
             await message.answer(str(error))
             return
-        if assignment is None:
-            await message.answer("На эту дату уборка не запланирована.")
-            return
         await state.clear()
-        participants = [person_id for person_id, _ in assignment.participants]
-        if len(participants) > 1:
-            await message.answer(
-                "Кого заменить?",
-                reply_markup=people_keyboard(
-                    f"wr_old:{data['task_id']}:{day.strftime('%Y%m%d')}",
-                    participants,
-                    back_callback=f"admin:menu:{data['task_id']}",
-                ),
-            )
-            return
-        old_person = participants[0] if participants else "none"
-        await message.answer(
-            "Кого поставить вместо него?",
-            reply_markup=people_keyboard(
-                f"wr_new:{data['task_id']}:{day.strftime('%Y%m%d')}:{old_person}",
-                WEEKLY_TASKS[data["task_id"]]["roster"],
-                back_callback=f"admin:menu:{data['task_id']}",
-            ),
-        )
-
-    @router.callback_query(F.data.startswith("wr_old:"))
-    async def weekly_replace_old(callback: CallbackQuery) -> None:
-        if not await require_admin(callback):
-            return
-        _, task_id, work_date, old_person = callback.data.split(":")
-        await callback.message.answer(
-            "Кого поставить вместо него?",
-            reply_markup=people_keyboard(
-                f"wr_new:{task_id}:{work_date}:{old_person}",
-                WEEKLY_TASKS[task_id]["roster"],
-                back_callback=f"admin:menu:{task_id}",
-            ),
-        )
-        await callback.answer()
-
-    @router.callback_query(F.data.startswith("wr_new:"))
-    async def weekly_replace_new(callback: CallbackQuery) -> None:
-        if not await require_admin(callback):
-            return
-        _, task_id, work_date, old_person, new_person = callback.data.split(":")
-        day = datetime.strptime(work_date, "%Y%m%d").date()
-        try:
-            weekly.replace_person(task_id, day, new_person, None if old_person == "none" else old_person)
-        except ValueError as error:
-            await callback.answer(str(error), show_alert=True)
-            return
-        await callback.message.answer(
-            "Замена внесена. Будущие назначения этой очереди будут пересчитаны.",
-            reply_markup=weekly_admin_keyboard(task_id),
-        )
-        await callback.answer()
+        await message.answer("Замена внесена. Очередь дальше будет считаться с учетом новой статистики.", reply_markup=admin_keyboard())
 
     @router.callback_query(F.data.startswith("admin:add:"))
     async def admin_add(callback: CallbackQuery, state: FSMContext) -> None:
@@ -546,7 +233,7 @@ def create_router(
         task_id = callback.data.rsplit(":", 1)[1]
         await state.set_state(Form.add_weekly)
         await state.update_data(task_id=task_id)
-        await callback.message.answer("Введи дату уборки. После этого выберешь второго человека кнопкой.")
+        await callback.message.answer("Введи дату и второго человека: `13.06.2026 Леонтьев`.", parse_mode="Markdown")
         await callback.answer()
 
     @router.message(Form.add_weekly)
@@ -555,35 +242,13 @@ def create_router(
             return
         data = await state.get_data()
         try:
-            day = parse_date(message.text)
+            day, person_id = _parse_date_person(message.text)
+            weekly.add_second_person(data["task_id"], day, person_id)
         except ValueError as error:
             await message.answer(str(error))
             return
         await state.clear()
-        await message.answer(
-            "Выбери второго человека:",
-            reply_markup=people_keyboard(
-                f"admin:add_weekly_person:{data['task_id']}:{day.isoformat()}",
-                WEEKLY_TASKS[data["task_id"]]["roster"],
-                back_callback=f"admin:menu:{data['task_id']}",
-            ),
-        )
-
-    @router.callback_query(F.data.startswith("admin:add_weekly_person:"))
-    async def add_weekly_person(callback: CallbackQuery) -> None:
-        if not await require_admin(callback):
-            return
-        _, _, task_id, work_date, person_id = callback.data.split(":")
-        try:
-            weekly.add_second_person(task_id, date.fromisoformat(work_date), person_id)
-        except ValueError as error:
-            await callback.answer(str(error), show_alert=True)
-            return
-        await callback.message.answer(
-            "Усиленная уборка внесена: каждому зачтется по 0.5.",
-            reply_markup=weekly_admin_keyboard(task_id),
-        )
-        await callback.answer()
+        await message.answer("Усиленная уборка внесена: каждому зачтется по 0.5.", reply_markup=admin_keyboard())
 
     @router.callback_query(F.data.startswith("admin:skip_weekly:"))
     async def admin_skip_weekly(callback: CallbackQuery, state: FSMContext) -> None:
@@ -607,7 +272,7 @@ def create_router(
             await message.answer(str(error))
             return
         await state.clear()
-        await message.answer("Отмечено: уборки не было, счетчик никому не увеличен.", reply_markup=weekly_admin_keyboard(data["task_id"]))
+        await message.answer("Отмечено: уборки не было, счетчик никому не увеличен.", reply_markup=admin_keyboard())
 
     @router.callback_query(F.data == "admin:skip_morning")
     async def admin_skip_morning(callback: CallbackQuery, state: FSMContext) -> None:
@@ -627,84 +292,33 @@ def create_router(
             await message.answer(str(error))
             return
         await state.clear()
-        await message.answer("День пропущен, очередь сдвинута вперед.", reply_markup=morning_admin_keyboard())
+        await message.answer("День пропущен, очередь сдвинута вперед.", reply_markup=admin_keyboard())
 
     @router.callback_query(F.data == "admin:restart_morning")
     async def admin_restart_morning(callback: CallbackQuery, state: FSMContext) -> None:
         if not await require_admin(callback):
             return
-        await callback.message.answer(
-            f"Выбери пару, с которой начать утренний круг {tomorrow().strftime('%d.%m.%Y')}:",
-            reply_markup=morning_pair_keyboard(tomorrow().isoformat()),
-        )
+        await state.set_state(Form.restart_morning)
+        await callback.message.answer("Введи двух уборщиков на завтра: `Лаврентьев Курочкин`.", parse_mode="Markdown")
         await callback.answer()
 
-    @router.callback_query(F.data.startswith("admin:morning_pair:"))
-    async def morning_pair(callback: CallbackQuery) -> None:
-        if not await require_admin(callback):
+    @router.message(Form.restart_morning)
+    async def restart_morning_value(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message):
             return
-        _, _, work_date, first_id, second_id = callback.data.split(":")
-        day = date.fromisoformat(work_date)
         try:
-            morning.restart_from_pair(day, first_id, second_id)
-        except ValueError as error:
-            await callback.answer(str(error), show_alert=True)
+            first, second = [parse_person(part) for part in message.text.replace(",", " ").split()[:2]]
+            morning.restart_from_pair(date.today() + timedelta(days=1), first, second)
+        except (ValueError, IndexError) as error:
+            await message.answer(str(error) or "Нужно ввести два имени.")
             return
-        await callback.message.answer(
-            f"Утренний круг перезапущен с {day.strftime('%d.%m.%Y')}: {person_name(first_id)} и {person_name(second_id)}.",
-            reply_markup=morning_admin_keyboard(),
-        )
-        await callback.answer()
-
-    @router.callback_query(F.data == "admin:morning_tomorrow")
-    async def admin_morning_tomorrow(callback: CallbackQuery) -> None:
-        if not await require_admin(callback):
-            return
-        day = tomorrow()
-        slots = morning.ensure_day(day)
-        await callback.message.answer(
-            f"Уборщики на завтра, {day.strftime('%d.%m.%Y')}:",
-            reply_markup=morning_tomorrow_keyboard(day.isoformat(), slots),
-        )
-        await callback.answer()
-
-    @router.callback_query(F.data.startswith("admin:replace_morning_slot:"))
-    async def replace_morning_slot(callback: CallbackQuery) -> None:
-        if not await require_admin(callback):
-            return
-        _, _, work_date, slot_no = callback.data.split(":")
-        await callback.message.answer(
-            "Выбери замену:",
-            reply_markup=people_keyboard(
-                f"admin:set_morning_slot:{work_date}:{slot_no}",
-                MORNING_ROSTER,
-                back_callback="admin:morning_tomorrow",
-            ),
-        )
-        await callback.answer()
-
-    @router.callback_query(F.data.startswith("admin:set_morning_slot:"))
-    async def set_morning_slot(callback: CallbackQuery) -> None:
-        if not await require_admin(callback):
-            return
-        _, _, work_date, slot_no, person_id = callback.data.split(":")
-        day = date.fromisoformat(work_date)
-        try:
-            morning.replace_slot(day, int(slot_no), person_id)
-        except ValueError as error:
-            await callback.answer(str(error), show_alert=True)
-            return
-        slots = morning.ensure_day(day)
-        await callback.message.answer(
-            f"Замена на {day.strftime('%d.%m.%Y')} внесена.",
-            reply_markup=morning_tomorrow_keyboard(day.isoformat(), slots),
-        )
-        await callback.answer()
+        await state.clear()
+        await message.answer("Утренний круг перезапущен с завтрашнего дня.", reply_markup=admin_keyboard())
 
     @router.callback_query(F.data.startswith("cant_weekly:"))
     async def cant_weekly(callback: CallbackQuery, state: FSMContext) -> None:
         _, task_id, work_date, person_id = callback.data.split(":")
-        person = bound_person(callback.from_user.id)
+        person = bound_person(callback.fromuser.id)
         if not person or person["id"] != person_id:
             await callback.answer("Эта кнопка только для назначенного человека.", show_alert=True)
             return
@@ -750,30 +364,19 @@ def create_router(
         if not await require_admin(callback):
             return
         request_id = int(callback.data.rsplit(":", 1)[1])
-        request = store.absence_request(request_id)
-        if not request:
-            await callback.answer("Заявка не найдена.", show_alert=True)
-            return
-        await callback.message.answer(
-            "Выбери замену:",
-            reply_markup=people_keyboard(
-                f"admin:absence_person:{request_id}",
-                WEEKLY_TASKS[request["task_id"]]["roster"],
-                back_callback=f"admin:menu:{request['task_id']}",
-            ),
-        )
+        await state.set_state(Form.weekly_absence_replacement)
+        await state.update_data(request_id=request_id)
+        await callback.message.answer("Введи имя замены.")
         await callback.answer()
 
-    @router.callback_query(F.data.startswith("admin:absence_person:"))
-    async def absence_person(callback: CallbackQuery) -> None:
-        if not await require_admin(callback):
+    @router.message(Form.weekly_absence_replacement)
+    async def weekly_absence_replacement(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message):
             return
-        _, _, request_id, replacement_id = callback.data.split(":")
-        request = store.absence_request(int(request_id))
-        if not request:
-            await callback.answer("Заявка не найдена.", show_alert=True)
-            return
+        data = await state.get_data()
+        request = store.absence_request(data["request_id"])
         try:
+            replacement_id = parse_person(message.text)
             weekly.replace_person(
                 request["task_id"],
                 date.fromisoformat(request["work_date"]),
@@ -782,10 +385,10 @@ def create_router(
             )
             weekly.close_absence_request(request["id"], "approved", replacement_id)
         except ValueError as error:
-            await callback.answer(str(error), show_alert=True)
+            await message.answer(str(error))
             return
-        await callback.message.answer("Замена внесена.", reply_markup=weekly_admin_keyboard(request["task_id"]))
-        await callback.answer()
+        await state.clear()
+        await message.answer("Замена внесена.", reply_markup=admin_keyboard())
 
     @router.callback_query(F.data.startswith("cant_morning:"))
     async def cant_morning(callback: CallbackQuery) -> None:
@@ -833,34 +436,41 @@ def create_router(
         if not await require_admin(callback):
             return
         debt_id = int(callback.data.rsplit(":", 1)[1])
-        await callback.message.answer(
-            "Выбери человека, который выйдет вместо них:",
-            reply_markup=people_keyboard(
-                f"admin:debt_person:{debt_id}",
-                MORNING_ROSTER,
-                back_callback="admin:menu:morning",
-            ),
-        )
+        await state.set_state(Form.morning_debt_replacement)
+        await state.update_data(debt_id=debt_id)
+        await callback.message.answer("Введи имя человека, который выйдет вместо них.")
         await callback.answer()
 
-    @router.callback_query(F.data.startswith("admin:debt_person:"))
-    async def debt_person(callback: CallbackQuery) -> None:
-        if not await require_admin(callback):
+    @router.message(Form.morning_debt_replacement)
+    async def morning_debt_replacement(message: Message, state: FSMContext) -> None:
+        if not await require_admin(message):
             return
-        _, _, debt_id, replacement_id = callback.data.split(":")
+        data = await state.get_data()
         try:
-            morning.manual_replacement_for_debt(int(debt_id), replacement_id)
+            replacement_id = parse_person(message.text)
+            morning.manual_replacement_for_debt(data["debt_id"], replacement_id)
         except ValueError as error:
-            await callback.answer(str(error), show_alert=True)
+            await message.answer(str(error))
             return
-        await callback.message.answer(
-            "Ручная замена внесена, долг будет отдан этому человеку.",
-            reply_markup=morning_admin_keyboard(),
-        )
-        await callback.answer()
-
-    @router.callback_query(F.data == "noop")
-    async def noop(callback: CallbackQuery) -> None:
-        await callback.answer()
+        await state.clear()
+        await message.answer("Ручная замена внесена, долг будет отдан этому человеку.", reply_markup=admin_keyboard())
 
     return router
+
+
+def _parse_date_person(text: str) -> tuple[date, str]:
+    parts = text.replace(",", " ").split()
+    if len(parts) < 2:
+        raise ValueError("Нужно ввести дату и имя.")
+    return parse_date(parts[0]), parse_person(parts[1])
+
+
+def _parse_weekly_replace(text: str) -> tuple[date, str | None, str]:
+    if "->" in text:
+        left, right = text.split("->", 1)
+        left_parts = left.split()
+        if len(left_parts) < 2:
+            raise ValueError("До стрелки должны быть дата и заменяемый.")
+        return parse_date(left_parts[0]), parse_person(left_parts[1]), parse_person(right.strip())
+    day, person_id = _parse_date_person(text)
+    return day, None, person_id
