@@ -2,6 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
+from pathlib import Path
+
+# --- МАГИЯ ДЛЯ ОБХОДА ОШИБКИ ИМПОРТОВ НА BOTHOST ---
+# Вычисляем путь к папке выше "bot" и добавляем её в систему, 
+# чтобы Python принудительно понял, где он находится
+parent_dir = str(Path(__file__).resolve().parent.parent)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+# Искусственно объявляем этот скрипт пакетом
+__package__ = "bot"
+# ---------------------------------------------------
 
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -50,14 +62,15 @@ async def main() -> None:
         replace_existing=True,
     )
 
-    # Уведомления по кафедре
+    # Уведомления по кафедре (в 20:00 за день до уборки)
     scheduler.add_job(
         notify_department,
         CronTrigger(hour=20, minute=0, timezone=config.timezone),
-        args=[store, dept, bot, config.timezone, True],  # True = is_tomorrow
+        args=[store, dept, bot, config.timezone, True], 
         id="dept_20_notice",
         replace_existing=True,
     )
+    # Уведомления по кафедре (в 14:30 в день уборки)
     scheduler.add_job(
         notify_department,
         CronTrigger(hour=14, minute=30, timezone=config.timezone),
@@ -65,6 +78,7 @@ async def main() -> None:
         id="dept_1430_notice",
         replace_existing=True,
     )
+    # Уведомления по кафедре (в 18:20 в день уборки)
     scheduler.add_job(
         notify_department,
         CronTrigger(hour=18, minute=20, timezone=config.timezone),
@@ -75,6 +89,7 @@ async def main() -> None:
     
     scheduler.start()
     await dispatcher.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())

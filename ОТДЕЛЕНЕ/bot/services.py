@@ -4,7 +4,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date, timedelta
 
-from .constants import MORNING_ROSTER, WEEKLY_TASKS, DEPARTMENT_ROSTER
+from .constants import DEPARTMENT_ROSTER, MORNING_ROSTER, WEEKLY_TASKS
 from .storage import JsonStore
 from .utils import person_name
 
@@ -44,8 +44,12 @@ class WeeklyService:
         return date.fromisoformat(self.store.data["settings"][f"{task_id}.anchor_date"])
 
     def is_cleaning_saturday(self, task_id: str, day: date) -> bool:
+        self._check_task(task_id)
         if day.weekday() != 5:
             return False
+        schedule = WEEKLY_TASKS[task_id].get("schedule")
+        if schedule == "weekly":
+            return True
         weeks = (day - self.anchor(task_id)).days // 7
         return weeks >= 0 and weeks % 3 in (0, 1)
 
@@ -83,7 +87,7 @@ class WeeklyService:
             status=assignment["status"],
             participants=tuple(
                 (participant["person_id"], float(participant["weight"]))
-                for participant in sorted(assignment["participants"], key=lambda item: item["role"])
+                for participant in sorted(assignment["participants"], key=self._participant_sort_key)
             ),
         )
 
@@ -108,9 +112,21 @@ class WeeklyService:
                     break
         else:
             target = participants[0] if participants else None
+            if target is None:
+                participants.append(
+                    {"person_id": new_person_id, "weight": 1.0, "role": "primary"}
+                )
+                if assignment["status"] == "skipped":
+                    assignment["status"] = "planned"
+                self._drop_future_planned(task_id, day)
+                self.store.save()
+                return
         if target is None:
             raise ValueError("Не нашел заменяемого в этом назначении.")
         target["person_id"] = new_person_id
+        if assignment["status"] == "skipped":
+            assignment["status"] = "planned"
+        self._drop_future_planned(task_id, day)
         self.store.save()
 
     def add_second_person(self, task_id: str, day: date, person_id: str) -> None:
@@ -123,11 +139,54 @@ class WeeklyService:
             raise ValueError("Этот человек уже стоит в назначении.")
         if len(assignment["participants"]) >= 2:
             raise ValueError("Для усиленной уборки уже назначены два человека.")
-        for participant in assignment["participants"]:
-            participant["weight"] = 0.5
+        if WEEKLY_TASKS[task_id].get("weight_mode") == "per_person":
+            weight = 1.0
+        else:
+            weight = 0.5
+            for participant in assignment["participants"]:
+                participant["weight"] = 0.5
         assignment["participants"].append(
-            {"person_id": person_id, "weight": 0.5, "role": "extra"}
+            {"person_id": person_id, "weight": weight, "role": "extra"}
         )
+        if assignment["status"] == "skipped":
+            assignment["status"] = "planned"
+        self._drop_future_planned(task_id, day)
+        self.store.save()
+
+    def record_completed(
+        self,
+        task_id: str,
+        day: date,
+        person_ids: list[str] | tuple[str, ...],
+    ) -> None:
+        self._check_task(task_id)
+        if not person_ids:
+            raise ValueError("Нужно выбрать хотя бы одного человека.")
+        for person_id in person_ids:
+            self._check_member(task_id, person_id)
+        weight = 1.0 if WEEKLY_TASKS[task_id].get("weight_mode") == "per_person" else 1.0 / len(person_ids)
+        self.store.data["weekly_assignments"] = [
+            assignment
+            for assignment in self.store.data["weekly_assignments"]
+            if not (assignment["task_id"] == task_id and assignment["work_date"] == day.isoformat())
+        ]
+        self.store.data["weekly_assignments"].append(
+            {
+                "id": self.store.next_id("weekly_assignment"),
+                "task_id": task_id,
+                "work_date": day.isoformat(),
+                "status": "completed",
+                "participants": [
+                    {
+                        "person_id": person_id,
+                        "weight": weight,
+                        "role": "primary" if index == 0 else "extra",
+                    }
+                    for index, person_id in enumerate(person_ids)
+                ],
+            }
+        )
+        self._drop_future_planned(task_id, day)
         self.store.save()
 
     def mark_skipped(self, task_id: str, day: date) -> None:
@@ -144,9 +203,62 @@ class WeeklyService:
         else:
             assignment["status"] = "skipped"
             assignment["participants"] = []
+        self._drop_future_planned(task_id, day)
         self.store.save()
 
-    def create_absence_request(self, task_kind: str, work_date: date, requester_id: str, reason: str, task_id: str | None = None) -> int:
+    def complete_planned(self, task_id: str, day: date) -> bool:
+        assignment = self.ensure_assignment(task_id, day)
+        if assignment is None:
+            return False
+        raw = self.store.weekly_assignment(task_id, day.isoformat())
+        if raw is None or raw["status"] != "planned":
+            return False
+        raw["status"] = "completed"
+        self.store.save()
+        return True
+
+    def complete_scheduled_for_day(
+        self,
+        day: date,
+        except_task: str | None = None,
+    ) -> list[str]:
+        completed = []
+        for task_id, task in WEEKLY_TASKS.items():
+            if task_id == except_task or not task.get("confirm", True):
+                continue
+            if self.complete_planned(task_id, day):
+                completed.append(task_id)
+        return completed
+
+    def complete_past_planned(self, today: date) -> int:
+        for task_id, task in WEEKLY_TASKS.items():
+            if not task.get("auto_complete", True):
+                continue
+            cursor = self.anchor(task_id)
+            while cursor < today:
+                if self.is_cleaning_saturday(task_id, cursor):
+                    self.ensure_assignment(task_id, cursor)
+                cursor += timedelta(days=1)
+        completed = 0
+        for assignment in self.store.data["weekly_assignments"]:
+            if assignment["status"] != "planned":
+                continue
+            if date.fromisoformat(assignment["work_date"]) >= today:
+                continue
+            assignment["status"] = "completed"
+            completed += 1
+        if completed:
+            self.store.save()
+        return completed
+
+    def create_absence_request(
+        self,
+        task_kind: str,
+        work_date: date,
+        requester_id: str,
+        reason: str,
+        task_id: str | None = None,
+    ) -> int:
         request_id = self.store.next_id("absence_request")
         self.store.data["absence_requests"].append(
             {
@@ -163,7 +275,12 @@ class WeeklyService:
         self.store.save()
         return request_id
 
-    def close_absence_request(self, request_id: int, status: str, replacement_id: str | None = None) -> None:
+    def close_absence_request(
+        self,
+        request_id: int,
+        status: str,
+        replacement_id: str | None = None,
+    ) -> None:
         request = self.store.absence_request(request_id)
         if not request:
             raise ValueError("Заявка не найдена.")
@@ -178,7 +295,9 @@ class WeeklyService:
             if day.weekday() != 5:
                 continue
             parts = [day.strftime("%d.%m.%Y")]
-            for task_id in WEEKLY_TASKS:
+            for task_id, task in WEEKLY_TASKS.items():
+                if not task.get("show_in_queue", True):
+                    continue
                 if not self.is_cleaning_saturday(task_id, day):
                     parts.append(f"{WEEKLY_TASKS[task_id]['short']}: нет уборки")
                     continue
@@ -195,24 +314,78 @@ class WeeklyService:
             lines.append(" | ".join(parts))
         return lines
 
-    def counts(self, task_id: str) -> dict[str, float]:
+    def counts(
+        self,
+        task_id: str,
+        statuses: tuple[str, ...] = ("planned", "completed"),
+    ) -> dict[str, float]:
         roster = WEEKLY_TASKS[task_id]["roster"]
         counts = {person_id: 0.0 for person_id in roster}
         for assignment in self.store.data["weekly_assignments"]:
-            if assignment["task_id"] != task_id or assignment["status"] not in ("planned", "completed"):
+            if assignment["task_id"] != task_id or assignment["status"] not in statuses:
                 continue
             for participant in assignment["participants"]:
                 counts[participant["person_id"]] += float(participant["weight"])
         return counts
 
+    def last_dates(
+        self,
+        task_id: str,
+        statuses: tuple[str, ...] = ("planned", "completed"),
+    ) -> dict[str, date | None]:
+        roster = WEEKLY_TASKS[task_id]["roster"]
+        last = {person_id: None for person_id in roster}
+        for assignment in self.store.data["weekly_assignments"]:
+            if assignment["task_id"] != task_id or assignment["status"] not in statuses:
+                continue
+            work_date = date.fromisoformat(assignment["work_date"])
+            for participant in assignment["participants"]:
+                person_id = participant["person_id"]
+                if person_id in last and (last[person_id] is None or work_date > last[person_id]):
+                    last[person_id] = work_date
+        return last
+
+    def history(self, task_id: str, limit: int | None = 10) -> list[WeeklyAssignment]:
+        self._check_task(task_id)
+        assignments = [
+            assignment
+            for assignment in self.store.data["weekly_assignments"]
+            if assignment["task_id"] == task_id and assignment["status"] in ("completed", "skipped")
+        ]
+        assignments.sort(key=lambda assignment: assignment["work_date"], reverse=True)
+        result = []
+        if limit is not None:
+            assignments = assignments[:limit]
+        for assignment in assignments:
+            result.append(
+                WeeklyAssignment(
+                    task_id=task_id,
+                    work_date=date.fromisoformat(assignment["work_date"]),
+                    status=assignment["status"],
+                    participants=tuple(
+                        (participant["person_id"], float(participant["weight"]))
+                        for participant in assignment["participants"]
+                    ),
+                )
+            )
+        return result
+
     def _pick_person(self, task_id: str, day: date) -> str:
         roster = WEEKLY_TASKS[task_id]["roster"]
         counts = self.counts(task_id)
+        last_dates = self.last_dates(task_id)
         blocked = self._same_week_participants(day, except_task=task_id)
         candidates = [person_id for person_id in roster if person_id not in blocked]
         if not candidates:
             candidates = list(roster)
-        return min(candidates, key=lambda person_id: (counts[person_id], roster.index(person_id)))
+        return min(
+            candidates,
+            key=lambda person_id: (
+                counts[person_id],
+                last_dates[person_id] or date.min,
+                roster.index(person_id),
+            ),
+        )
 
     def _same_week_participants(self, day: date, except_task: str) -> set[str]:
         monday = day - timedelta(days=day.weekday())
@@ -226,6 +399,11 @@ class WeeklyService:
                 blocked.update(participant["person_id"] for participant in assignment["participants"])
         return blocked
 
+    @staticmethod
+    def _participant_sort_key(participant: dict) -> tuple[int, str]:
+        role_order = {"primary": 0, "extra": 1}
+        return role_order.get(participant.get("role"), 99), participant.get("person_id", "")
+
     def _check_task(self, task_id: str) -> None:
         if task_id not in WEEKLY_TASKS:
             raise ValueError(f"Неизвестная работа: {task_id}")
@@ -233,6 +411,18 @@ class WeeklyService:
     def _check_member(self, task_id: str, person_id: str) -> None:
         if person_id not in WEEKLY_TASKS[task_id]["roster"]:
             raise ValueError("Этот человек не входит в очередь этой работы.")
+
+    def _drop_future_planned(self, task_id: str, changed_day: date) -> None:
+        changed = changed_day.isoformat()
+        self.store.data["weekly_assignments"] = [
+            assignment
+            for assignment in self.store.data["weekly_assignments"]
+            if not (
+                assignment["task_id"] == task_id
+                and assignment["status"] == "planned"
+                and assignment["work_date"] > changed
+            )
+        ]
 
 
 class MorningService:
@@ -268,10 +458,24 @@ class MorningService:
             pointer = (pointer + 1) % len(MORNING_ROSTER)
             debt = self._open_debt_for_lender(original)
             if debt:
-                rows.append({"slot_no": slot_no, "original_person_id": original, "person_id": debt["borrower_id"], "source": "debt"})
+                rows.append(
+                    {
+                        "slot_no": slot_no,
+                        "original_person_id": original,
+                        "person_id": debt["borrower_id"],
+                        "source": "debt",
+                    }
+                )
                 paid_debts.append(debt)
             else:
-                rows.append({"slot_no": slot_no, "original_person_id": original, "person_id": original, "source": "normal"})
+                rows.append(
+                    {
+                        "slot_no": slot_no,
+                        "original_person_id": original,
+                        "person_id": original,
+                        "source": "normal",
+                    }
+                )
         self.store.data["morning_days"][day.isoformat()] = {
             "status": "planned",
             "pointer_before": pointer_before,
@@ -286,10 +490,17 @@ class MorningService:
 
     def get_day(self, day: date) -> list[MorningSlot] | None:
         record = self.store.data["morning_days"].get(day.isoformat())
-        if record is None: return None
-        if record["status"] == "skipped": return []
+        if record is None:
+            return None
+        if record["status"] == "skipped":
+            return []
         return [
-            MorningSlot(slot_no=slot["slot_no"], original_person_id=slot["original_person_id"], person_id=slot["person_id"], source=slot["source"])
+            MorningSlot(
+                slot_no=slot["slot_no"],
+                original_person_id=slot["original_person_id"],
+                person_id=slot["person_id"],
+                source=slot["source"],
+            )
             for slot in sorted(record["slots"], key=lambda item: item["slot_no"])
         ]
 
@@ -301,25 +512,40 @@ class MorningService:
             if not slots:
                 lines.append(f"{day.strftime('%d.%m.%Y')}: уборки не было")
                 continue
-            names = ", ".join(f"{person_name(s.person_id)}" + (f" за {person_name(s.original_person_id)}" if s.person_id != s.original_person_id else "") for s in slots)
+            names = ", ".join(
+                f"{person_name(slot.person_id)}"
+                + (
+                    f" за {person_name(slot.original_person_id)}"
+                    if slot.person_id != slot.original_person_id
+                    else ""
+                )
+                for slot in slots
+            )
             lines.append(f"{day.strftime('%d.%m.%Y')}: {names}")
         return lines
 
     def borrow(self, day: date, borrower_id: str) -> tuple[str, int]:
         slots = self.ensure_day(day)
-        if borrower_id not in [s.person_id for s in slots]:
+        if borrower_id not in [slot.person_id for slot in slots]:
             raise ValueError("Этот человек не назначен на указанную утреннюю уборку.")
-        assigned = {s.person_id for s in slots}
+        assigned = {slot.person_id for slot in slots}
         lender_id = self._next_lender(borrower_id, assigned)
         record = self.store.data["morning_days"][day.isoformat()]
-        slot = next(s for s in record["slots"] if s["person_id"] == borrower_id)
+        slot = next(slot for slot in record["slots"] if slot["person_id"] == borrower_id)
         slot["person_id"] = lender_id
         slot["source"] = "borrow"
         debt_id = self.store.next_id("morning_debt")
-        self.store.data["morning_debts"].append({
-            "id": debt_id, "borrower_id": borrower_id, "lender_id": lender_id,
-            "created_for_date": day.isoformat(), "paid_date": None, "status": "open"
-        })
+        self.store.data["morning_debts"].append(
+            {
+                "id": debt_id,
+                "borrower_id": borrower_id,
+                "lender_id": lender_id,
+                "created_for_date": day.isoformat(),
+                "paid_date": None,
+                "status": "open",
+            }
+        )
+        self._drop_future_days_after(day)
         self.store.save()
         return lender_id, debt_id
 
@@ -342,13 +568,65 @@ class MorningService:
                 slot["source"] = "manual_borrow"
                 break
         debt["lender_id"] = replacement_id
+        self._drop_future_days_after(date.fromisoformat(debt["created_for_date"]))
         self.store.save()
+
+    def replace_slot(self, day: date, slot_no: int, replacement_id: str) -> None:
+        if replacement_id not in MORNING_ROSTER:
+            raise ValueError("Этот человек не участвует в утренней очереди.")
+        self.ensure_day(day)
+        record = self.store.data["morning_days"][day.isoformat()]
+        assigned_elsewhere = {
+            slot["person_id"]
+            for slot in record["slots"]
+            if slot["slot_no"] != slot_no
+        }
+        if replacement_id in assigned_elsewhere:
+            raise ValueError("Этот человек уже назначен на эту утреннюю уборку.")
+        for slot in record["slots"]:
+            if slot["slot_no"] == slot_no:
+                borrower_id = slot["person_id"]
+                if borrower_id == replacement_id:
+                    return
+                slot["person_id"] = replacement_id
+                slot["source"] = "manual_borrow"
+                self.store.data["morning_debts"].append(
+                    {
+                        "id": self.store.next_id("morning_debt"),
+                        "borrower_id": borrower_id,
+                        "lender_id": replacement_id,
+                        "created_for_date": day.isoformat(),
+                        "paid_date": None,
+                        "status": "open",
+                    }
+                )
+                self._drop_future_days_after(day)
+                self.store.save()
+                return
+        raise ValueError("Не нашел это место в утренней уборке.")
+
+    def _drop_future_days_after(self, day: date) -> None:
+        key = day.isoformat()
+        future_keys = sorted(
+            work_date for work_date in self.store.data["morning_days"] if work_date > key
+        )
+        for debt in self.store.data["morning_debts"]:
+            if debt.get("paid_date") in future_keys:
+                debt["status"] = "open"
+                debt["paid_date"] = None
+        for future_key in future_keys:
+            del self.store.data["morning_days"][future_key]
+        record = self.store.data["morning_days"].get(key)
+        if record is not None:
+            self.store.data["morning_state"]["pointer"] = record["pointer_after"]
 
     def mark_skipped(self, day: date) -> None:
         self.ensure_day(day)
         key = day.isoformat()
         record = deepcopy(self.store.data["morning_days"][key])
-        future_keys = sorted(w for w in self.store.data["morning_days"] if w >= key)
+        future_keys = sorted(
+            work_date for work_date in self.store.data["morning_days"] if work_date >= key
+        )
         for debt in self.store.data["morning_debts"]:
             if debt.get("paid_date") in future_keys:
                 debt["status"] = "open"
@@ -356,8 +634,10 @@ class MorningService:
         for future_key in future_keys:
             del self.store.data["morning_days"][future_key]
         self.store.data["morning_days"][key] = {
-            "status": "skipped", "pointer_before": record["pointer_before"],
-            "pointer_after": record["pointer_before"], "slots": []
+            "status": "skipped",
+            "pointer_before": record["pointer_before"],
+            "pointer_after": record["pointer_before"],
+            "slots": [],
         }
         self.store.data["morning_state"]["pointer"] = record["pointer_before"]
         self.store.save()
@@ -369,27 +649,46 @@ class MorningService:
         pointer_before = MORNING_ROSTER.index(first_id)
         pointer_after = (MORNING_ROSTER.index(second_id) + 1) % len(MORNING_ROSTER)
         key = day.isoformat()
-        for future_key in sorted(w for w in self.store.data["morning_days"] if w >= key):
+        for future_key in sorted(
+            work_date for work_date in self.store.data["morning_days"] if work_date >= key
+        ):
             del self.store.data["morning_days"][future_key]
         self.store.data["morning_days"][key] = {
-            "status": "planned", "pointer_before": pointer_before, "pointer_after": pointer_after,
+            "status": "planned",
+            "pointer_before": pointer_before,
+            "pointer_after": pointer_after,
             "slots": [
-                {"slot_no": 1, "original_person_id": first_id, "person_id": first_id, "source": "manual_restart"},
-                {"slot_no": 2, "original_person_id": second_id, "person_id": second_id, "source": "manual_restart"}
-            ]
+                {
+                    "slot_no": 1,
+                    "original_person_id": first_id,
+                    "person_id": first_id,
+                    "source": "manual_restart",
+                },
+                {
+                    "slot_no": 2,
+                    "original_person_id": second_id,
+                    "person_id": second_id,
+                    "source": "manual_restart",
+                },
+            ],
         }
         self.store.data["morning_state"]["pointer"] = pointer_after
         self.store.save()
 
     def _open_debt_for_lender(self, lender_id: str) -> dict | None:
-        debts = [d for d in self.store.data["morning_debts"] if d["lender_id"] == lender_id and d["status"] == "open"]
-        return min(debts, key=lambda d: d["id"]) if debts else None
+        debts = [
+            debt
+            for debt in self.store.data["morning_debts"]
+            if debt["lender_id"] == lender_id and debt["status"] == "open"
+        ]
+        return min(debts, key=lambda debt: debt["id"]) if debts else None
 
     def _next_lender(self, borrower_id: str, assigned_today: set[str]) -> str:
         start = MORNING_ROSTER.index(borrower_id)
         for step in range(1, len(MORNING_ROSTER)):
             candidate = MORNING_ROSTER[(start + step) % len(MORNING_ROSTER)]
-            if candidate not in assigned_today: return candidate
+            if candidate not in assigned_today:
+                return candidate
         raise ValueError("Не удалось найти следующего человека для займа.")
 
 
@@ -397,78 +696,49 @@ class DepartmentService:
     def __init__(self, store: JsonStore):
         self.store = store
 
-    def get_monday(self, day: date) -> date:
-        return day - timedelta(days=day.weekday())
+    def set_anchor(self, anchor: date) -> None:
+        monday = anchor - timedelta(days=anchor.weekday())
+        self.store.data["settings"]["department.anchor_date"] = monday.isoformat()
+        self.store.save()
+
+    def anchor(self) -> date:
+        val = self.store.data["settings"].get("department.anchor_date", "2026-10-05")
+        return date.fromisoformat(val)
 
     def is_active_week(self, day: date) -> bool:
-        monday = self.get_monday(day)
-        anchor = date.fromisoformat(self.store.data["department_anchor"])
-        weeks_diff = (monday - anchor).days // 7
-        if weeks_diff >= 0 and weeks_diff % 3 == 0:
-            return True
-        if monday.isoformat() in self.store.data["department_extra_weeks"]:
-            return True
-        return False
-
-    def add_extra_week(self, day: date) -> None:
-        monday = self.get_monday(day).isoformat()
-        if monday not in self.store.data["department_extra_weeks"]:
-            self.store.data["department_extra_weeks"].append(monday)
-            self.store.save()
+        monday = day - timedelta(days=day.weekday())
+        anchor = self.anchor()
+        days_diff = (monday - anchor).days
+        weeks_diff = days_diff // 7
+        return weeks_diff % 3 == 0
 
     def counts(self) -> dict[str, float]:
-        counts = {pid: 0.0 for pid in DEPARTMENT_ROSTER}
-        for day_str, record in self.store.data["department_days"].items():
-            persons = record.get("persons", [])
-            if not persons:
+        counts = {p: 0.0 for p in DEPARTMENT_ROSTER}
+        for date_str, participants in self.store.data.get("department_days", {}).items():
+            if not participants:
                 continue
-            weight = 3.0 / len(persons)
-            for pid in persons:
-                if pid in counts:
-                    counts[pid] += weight
+            weight = 3.0 / len(participants)
+            for p in participants:
+                if p in counts:
+                    counts[p] += weight
         return counts
 
     def ensure_day(self, day: date) -> list[str]:
         if not self.is_active_week(day):
             return []
+            
         key = day.isoformat()
         if key in self.store.data["department_days"]:
-            return self.store.data["department_days"][key]["persons"]
+            return self.store.data["department_days"][key]
 
-        current_counts = self.counts()
+        counts = self.counts()
         roster = list(DEPARTMENT_ROSTER)
-        roster.sort(key=lambda p: (current_counts[p], DEPARTMENT_ROSTER.index(p)))
-        picked = roster[:3]
+        picked = sorted(roster, key=lambda p: (counts.get(p, 0.0), roster.index(p)))[:3]
         
-        self.store.data["department_days"][key] = {"persons": picked}
+        self.store.data["department_days"][key] = picked
         self.store.save()
         return picked
 
-    def edit_day(self, day: date, action: str, p1: str, p2: str | None = None) -> None:
-        self.ensure_day(day)
-        key = day.isoformat()
-        if key not in self.store.data["department_days"]:
-            self.store.data["department_days"][key] = {"persons": []}
-        
-        persons: list[str] = self.store.data["department_days"][key]["persons"]
-
-        if action == "add":
-            if p1 not in persons: persons.append(p1)
-        elif action == "remove":
-            if p1 in persons: persons.remove(p1)
-        elif action == "replace":
-            if p1 in persons: persons.remove(p1)
-            if p2 and p2 not in persons: persons.append(p2)
-        
+    def override_day(self, day: date, participants: list[str]) -> None:
+        self.store.data["department_days"][day.isoformat()] = participants
         self.store.save()
-
-    def preview(self, start: date, days: int = 21) -> list[str]:
-        lines = []
-        for offset in range(days):
-            day = start + timedelta(days=offset)
-            if self.is_active_week(day):
-                persons = self.ensure_day(day)
-                weight = 3.0 / len(persons) if persons else 0
-                names = ", ".join(person_name(p) for p in persons)
-                lines.append(f"{day.strftime('%d.%m')} (каф): {names} [+{weight:g}]")
-        return lines

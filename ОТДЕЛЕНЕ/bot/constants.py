@@ -44,6 +44,26 @@ TOILET_ROSTER = (
     "kazakov",
 )
 
+# Состав кафедры идентичен туалету
+DEPARTMENT_ROSTER = (
+    "klyus",
+    "leontyev",
+    "orlov",
+    "pilugin",
+    "sovenko",
+    "kazakov",
+)
+
+FLIGHT_DECK_ROSTER = (
+    "sharov",
+    "klyus",
+    "leontyev",
+    "orlov",
+    "pilugin",
+    "sovenko",
+    "kazakov",
+)
+
 MORNING_ROSTER = (
     "lavrentyev",
     "kurochkin",
@@ -54,21 +74,41 @@ MORNING_ROSTER = (
     "kazakov",
 )
 
-DEPARTMENT_ROSTER = TOILET_ROSTER
-
 WEEKLY_TASKS = {
     "dorm_weekly": {
         "title": "субботняя уборка спального помещения",
         "short": "спальник",
         "roster": DORM_WEEKLY_ROSTER,
+        "schedule": "weekly",
+        "weight_mode": "split",
+        "show_in_queue": True,
+        "notify": True,
+        "confirm": True,
+        "auto_complete": True,
     },
     "toilet": {
         "title": "уборка туалета",
         "short": "туалет",
         "roster": TOILET_ROSTER,
+        "schedule": "two_on_one_off",
+        "weight_mode": "per_person",
+        "show_in_queue": True,
+        "notify": True,
+        "confirm": True,
+        "auto_complete": True,
+    },
+    "flight_deck": {
+        "title": "субботняя взлетка",
+        "short": "взлетка",
+        "roster": FLIGHT_DECK_ROSTER,
+        "schedule": "weekly",
+        "weight_mode": "split",
+        "show_in_queue": False,
+        "notify": False,
+        "confirm": False,
+        "auto_complete": False,
     },
 }
 
 DEFAULT_WEEKLY_ANCHOR = "2026-06-13"
-DEFAULT_DEPARTMENT_ANCHOR = "2026-10-05"  # Понедельник базовой недели
 MOSCOW_TZ = "Europe/Moscow"
