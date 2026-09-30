@@ -1,0 +1,21 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+ENV DATA_DIR=/app/data
+RUN mkdir -p /app/data && chmod 777 /app/data
+RUN chown -R $(id -u):$(id -g) /app/data 2>/dev/null || chown -R 1000:1000 /app/data || true
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir python-dotenv
+
+COPY . .
+
+# Создаем скрипт для прав на папку с базой
+RUN echo '#!/bin/sh\nset -e\nmkdir -p /app/data\nchmod 777 /app/data\nchown -R $(id -u):$(id -g) /app/data 2>/dev/null || true\nexec "$@"' > /usr/local/bin/entrypoint.sh && chmod +x /usr/local/bin/entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+# Правильный запуск бота как модуля пакета
+CMD ["python", "-m", "bot.main"]
